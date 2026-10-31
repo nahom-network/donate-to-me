@@ -11,6 +11,10 @@ binding = "DB"
 database_name = "donate-to-me"
 database_id = "e05cc09a-c942-4703-a7fb-0340dc44e399"
 
+# Served at /sticker.webp so Telegram can fetch it for the /start photo.
+[assets]
+directory = "./src/assets"
+
 [vars]
 JAMI_PRODUCT_ID = "p_JNNaCND81yLE"
 # Optional comma-separated donation amounts in ETB.

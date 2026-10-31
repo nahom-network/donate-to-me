@@ -20,6 +20,7 @@ import {
   sendChatAction,
   sendMessage,
   sendMessageGetId,
+  sendPhoto,
 } from "./telegram";
 import { paymentClient, type CheckoutResult } from "./payment";
 import {
@@ -112,14 +113,23 @@ async function onMessage(message: TgMessage, env: Env) {
 
   if (command === "start") {
     await resetPending(env, chatId, userId);
-    return sendMessage(
-      env,
-      chatId,
+    const caption =
       `Selam${name}! 👋\n\n` +
-        `This bot lets you support me with a secure donation via Telebirr, M-Pesa, or CBE Birr.\n\n` +
-        `Tap <b>Donate</b> to choose an amount.`,
-      startKeyboard(),
-    );
+      `This bot lets you support me with a secure donation via Telebirr, M-Pesa, or CBE Birr.\n\n` +
+      `Tap <b>Donate</b> to choose an amount.`;
+    try {
+      return await sendPhoto(
+        env,
+        chatId,
+        `${publicOrigin(env)}/sticker.webp`,
+        caption,
+        startKeyboard(),
+      );
+    } catch (error) {
+      // Never let a missing/unsupported image block /start.
+      console.error("Could not send start photo", errorMessage(error));
+      return sendMessage(env, chatId, caption, startKeyboard());
+    }
   }
   if (command === "donate") {
     await resetPending(env, chatId, userId);
@@ -206,6 +216,19 @@ function startKeyboard() {
   };
 }
 
+/** Public origin used for the start image served by Workers Static Assets. */
+function publicOrigin(env: Env): string {
+  const configured = env.WEBHOOK_URL?.trim();
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {
+      /* fall through to the default */
+    }
+  }
+  return "https://donate-to-me.nahom-network.workers.dev";
+}
+
 async function onCallback(query: TgCallback, env: Env) {
   const chatId = query.message?.chat.id;
   const messageId = query.message?.message_id;
@@ -233,6 +256,12 @@ async function onCallback(query: TgCallback, env: Env) {
   if (query.data === "donate" || query.data === "back") {
     await resetPending(env, chatId, userId);
     const text = "Choose a donation amount in ETB:";
+    // The start screen is a photo, and editMessageText cannot edit photo
+    // messages. Replace it with a fresh text message for the amount list.
+    if (query.message?.photo && messageId) {
+      await deleteMessage(env, chatId, messageId);
+      return sendMessage(env, chatId, text, amountKeyboard(env));
+    }
     if (messageId) {
       return editMessageText(env, chatId, messageId, text, amountKeyboard(env));
     }

@@ -68,6 +68,22 @@ export async function sendMessage(
   });
 }
 
+export async function sendPhoto(
+  env: Env,
+  chatId: number,
+  photo: string,
+  caption: string,
+  replyMarkup?: unknown,
+): Promise<void> {
+  await telegram(env, "sendPhoto", {
+    chat_id: chatId,
+    photo,
+    caption,
+    parse_mode: "HTML",
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+  });
+}
+
 export async function sendMessageGetId(
   env: Env,
   chatId: number,

@@ -43,7 +43,7 @@ export type TgCallback = {
   id: string;
   data?: string;
   from: TgUser;
-  message?: { message_id?: number; chat: TgChat };
+  message?: { message_id?: number; chat: TgChat; photo?: unknown };
 };
 
 export type TgUpdate = {
