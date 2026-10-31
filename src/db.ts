@@ -1,7 +1,8 @@
 import type { Env, Session, TgUser } from "./types";
 import { DONATION_SESSION_TTL_MS } from "./constants";
 import { paymentClient } from "./payment";
-import { errorMessage } from "./util";
+import { updateCheckoutMessage } from "./session";
+import { errorMessage, formatEtb } from "./util";
 
 export type HallOfFameRow = {
   firstName: string | null;
@@ -180,21 +181,44 @@ export async function reconcileDonations(env: Env): Promise<void> {
     .run();
 
   const { results } = await env.DB.prepare(
-    `SELECT session_id AS sessionId FROM donations
+    `SELECT session_id AS sessionId,
+            user_id AS userId,
+            amount_minor AS amountMinor
+     FROM donations
      WHERE status = 'pending' AND created_at >= ?
      ORDER BY created_at ASC LIMIT 10`,
   )
     .bind(cutoff)
-    .all<{ sessionId: string }>();
+    .all<{ sessionId: string; userId: number; amountMinor: number }>();
 
   const payment = paymentClient(env);
   for (const row of results ?? []) {
     try {
       const status = await payment.getCheckoutStatus(row.sessionId);
       if (status.status === "completed") {
-        await markDonationCompleted(env, row.sessionId, status.orderId);
+        const changed = await markDonationCompleted(
+          env,
+          row.sessionId,
+          status.orderId,
+        );
+        if (changed) {
+          await updateCheckoutMessage(
+            env,
+            row.userId,
+            row.sessionId,
+            `✅ Payment received — thank you for donating ${formatEtb(row.amountMinor / 100)}!`,
+          );
+        }
       } else if (status.status === "expired") {
-        await markDonationExpired(env, row.sessionId);
+        const changed = await markDonationExpired(env, row.sessionId);
+        if (changed) {
+          await updateCheckoutMessage(
+            env,
+            row.userId,
+            row.sessionId,
+            "⌛ That checkout expired. Send /donate to try again.",
+          );
+        }
       }
     } catch (error) {
       console.warn(
@@ -286,6 +310,12 @@ export async function reconcileSessions(
           },
           true,
         );
+        await updateCheckoutMessage(
+          env,
+          userId,
+          session.sessionId,
+          `✅ Payment received — thank you for donating ${formatEtb(session.amountMinor / 100)}!`,
+        );
         summary.completed++;
       } else if (status.status === "expired") {
         await ensureUser(env, userId);
@@ -299,6 +329,12 @@ export async function reconcileSessions(
             status: "expired",
           },
           true,
+        );
+        await updateCheckoutMessage(
+          env,
+          userId,
+          session.sessionId,
+          "⌛ That checkout expired. Send /donate to try again.",
         );
         summary.expired++;
       } else {

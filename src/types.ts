@@ -65,6 +65,8 @@ export type Session = {
   sessionId: string;
   amountMinor: number;
   createdAt: number;
+  /** The checkout prompt message, edited into a receipt once it settles. */
+  checkoutMessageId?: number;
 };
 
 /** A gateway was chosen; the bot still needs the payer's phone number. */

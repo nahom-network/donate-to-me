@@ -1,9 +1,11 @@
-import type { Env, PendingCheckout } from "./types";
+import type { Env, PendingCheckout, Session } from "./types";
 import {
   GATEWAYS,
   PENDING_TTL_SECONDS,
   UPDATE_DEDUPE_TTL_SECONDS,
 } from "./constants";
+import { editMessageText } from "./telegram";
+import { errorMessage } from "./util";
 
 export function sessionKey(userId: number): string {
   return `tg:${userId}:latest`;
@@ -11,6 +13,30 @@ export function sessionKey(userId: number): string {
 
 export function pendingKey(userId: number): string {
   return `tg:${userId}:pending`;
+}
+
+/**
+ * Turn the checkout prompt into a result message (payment received / expired)
+ * and drop its inline buttons. Does nothing when the session is gone or when
+ * the message was never recorded.
+ */
+export async function updateCheckoutMessage(
+  env: Env,
+  userId: number,
+  sessionId: string,
+  text: string,
+): Promise<void> {
+  try {
+    const raw = await env.SESSIONS.get(sessionKey(userId));
+    if (!raw) return;
+    const session = JSON.parse(raw) as Session;
+    if (session.sessionId !== sessionId || !session.checkoutMessageId) return;
+    await editMessageText(env, userId, session.checkoutMessageId, text, {
+      inline_keyboard: [],
+    });
+  } catch (error) {
+    console.warn("Could not update checkout message", errorMessage(error));
+  }
 }
 
 export async function getPending(

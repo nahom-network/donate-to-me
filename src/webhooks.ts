@@ -13,9 +13,10 @@ import {
   upsertDonation,
 } from "./db";
 import { sendMessage } from "./telegram";
+import { updateCheckoutMessage } from "./session";
 import { errorMessage, escapeHtml, formatEtb, json } from "./util";
 
-type Notification = { userId: number; text: string };
+type Notification = { userId: number; sessionId: string; text: string };
 
 /**
  * POST /webhooks/payments
@@ -104,6 +105,7 @@ async function applyEvent(
       return changed
         ? {
             userId: existing.userId,
+            sessionId,
             text: `✅ Payment received — thank you for donating ${formatEtb(existing.amountMinor / 100)}!`,
           }
         : null;
@@ -136,6 +138,7 @@ async function applyEvent(
     );
     return {
       userId,
+      sessionId,
       text: `✅ Payment received — thank you for donating ${formatEtb(amount / 100)}!`,
     };
   }
@@ -147,6 +150,7 @@ async function applyEvent(
     if (!changed || !existing) return null;
     return {
       userId: existing.userId,
+      sessionId: event.data.sessionId,
       text: expiredText(event.data.failure),
     };
   }
@@ -184,6 +188,14 @@ function expiredText(
 }
 
 async function notifyDonor(env: Env, info: Notification): Promise<void> {
+  // Replace the "approve / open checkout" prompt with the final result, then
+  // send a fresh message so the payer still gets a push notification.
+  await updateCheckoutMessage(
+    env,
+    info.userId,
+    info.sessionId,
+    info.text,
+  );
   try {
     await sendMessage(env, info.userId, info.text);
   } catch (error) {

@@ -28,6 +28,7 @@ import {
   getPending,
   pendingKey,
   sessionKey,
+  updateCheckoutMessage,
 } from "./session";
 import {
   getDonationBySession,
@@ -426,15 +427,17 @@ async function completeCheckout(
     );
   }
 
-  await env.SESSIONS.put(
-    sessionKey(userId),
-    JSON.stringify({
-      sessionId: checkout.sessionId,
-      amountMinor: pending.amount * 100,
-      createdAt: Date.now(),
-    } satisfies Session),
-    { expirationTtl: 86400 },
-  );
+  const session: Session = {
+    sessionId: checkout.sessionId,
+    amountMinor: pending.amount * 100,
+    createdAt: Date.now(),
+  };
+  const saveSession = () =>
+    env.SESSIONS.put(sessionKey(userId), JSON.stringify(session), {
+      expirationTtl: 86400,
+    });
+
+  await saveSession();
 
   await upsertDonation(env, {
     userId,
@@ -444,8 +447,9 @@ async function completeCheckout(
     status: "pending",
   });
 
+  let messageId: number | undefined;
   if (checkout.mode === "redirect" && checkout.checkoutUrl) {
-    return sendMessage(
+    messageId = await sendMessageGetId(
       env,
       chatId,
       `Your ${formatEtb(pending.amount)} donation checkout is ready.\n\nPay with <b>${gatewayLabel(pending.gateway)}</b> on the secure payment page, then check the result here.`,
@@ -468,24 +472,30 @@ async function completeCheckout(
         ] satisfies InlineButton[][],
       },
     );
+  } else {
+    messageId = await sendMessageGetId(
+      env,
+      chatId,
+      `Approve the ${formatEtb(pending.amount)} request on your phone, then check the result here.`,
+      {
+        inline_keyboard: [
+          [
+            {
+              text: "I’ve paid — check status",
+              callback_data: "status",
+              style: "primary",
+            },
+          ],
+        ] satisfies InlineButton[][],
+      },
+    );
   }
 
-  return sendMessage(
-    env,
-    chatId,
-    `Approve the ${formatEtb(pending.amount)} request on your phone, then check the result here.`,
-    {
-      inline_keyboard: [
-        [
-          {
-            text: "I’ve paid — check status",
-            callback_data: "status",
-            style: "primary",
-          },
-        ],
-      ] satisfies InlineButton[][],
-    },
-  );
+  // Remember the prompt so a webhook can edit it into the final result.
+  if (messageId) {
+    session.checkoutMessageId = messageId;
+    await saveSession();
+  }
 }
 
 async function cancelDonation(
@@ -627,10 +637,18 @@ async function showStatus(
   const payment = paymentClient(env);
   const status = await payment.getCheckoutStatus(session.sessionId);
   if (status.status === "completed") {
+    const message = `✅ Payment received — thank you for donating ${formatEtb(session.amountMinor / 100)}!`;
     try {
       const existing = await getDonationBySession(env, session.sessionId);
       if (existing) {
-        await markDonationCompleted(env, session.sessionId, status.orderId);
+        const changed = await markDonationCompleted(
+          env,
+          session.sessionId,
+          status.orderId,
+        );
+        if (changed) {
+          await updateCheckoutMessage(env, userId, session.sessionId, message);
+        }
       } else {
         // The row can be missing if this session was created before D1 was
         // available; backfill it so the donor appears in the hall of fame.
@@ -643,18 +661,23 @@ async function showStatus(
           orderId: status.orderId,
           completedAt: Date.now(),
         });
+        await updateCheckoutMessage(env, userId, session.sessionId, message);
       }
     } catch (error) {
       console.error("Could not record completed donation", errorMessage(error));
     }
-    await sendMessage(
-      env,
-      chatId,
-      `Payment received — thank you for donating ${formatEtb(session.amountMinor / 100)}!`,
-    );
+    await sendMessage(env, chatId, message);
   } else if (status.status === "expired") {
     try {
-      await markDonationExpired(env, session.sessionId);
+      const changed = await markDonationExpired(env, session.sessionId);
+      if (changed) {
+        await updateCheckoutMessage(
+          env,
+          userId,
+          session.sessionId,
+          "⌛ That checkout expired. Send /donate to try again.",
+        );
+      }
     } catch (error) {
       console.error("Could not record expired donation", errorMessage(error));
     }
