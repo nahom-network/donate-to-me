@@ -53,6 +53,13 @@ export async function handlePaymentWebhook(
     return json({ ok: false, error: "Invalid payload" }, 400);
   }
 
+  // Never acknowledge an event we cannot persist: without this guard a Worker
+  // deployed without the D1 binding would silently drop every donation.
+  if (!env.DB) {
+    console.error("Payment webhook received but the DB binding is missing");
+    return json({ ok: false, error: "Database is not configured" }, 503);
+  }
+
   // Deliveries are retried and may be resent, so the event id is the
   // idempotency key.
   if (await wasProcessed(env, event.id)) {

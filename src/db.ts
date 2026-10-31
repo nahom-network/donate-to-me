@@ -1,4 +1,4 @@
-import type { Env, TgUser } from "./types";
+import type { Env, Session, TgUser } from "./types";
 import { DONATION_SESSION_TTL_MS } from "./constants";
 import { paymentClient } from "./payment";
 import { errorMessage } from "./util";
@@ -49,7 +49,7 @@ export async function recordUser(
 
 /** Make sure a donor has a users row before a foreign-key insert. */
 export async function ensureUser(env: Env, userId: number): Promise<void> {
-  if (!env.DB) return;
+  if (!env.DB) throw new Error("D1 binding is not configured");
   const now = Date.now();
   await env.DB.prepare(
     `INSERT INTO users (id, first_seen_at, last_seen_at) VALUES (?, ?, ?)
@@ -77,7 +77,10 @@ export async function upsertDonation(
   },
   strict = false,
 ): Promise<boolean> {
-  if (!env.DB) return false;
+  if (!env.DB) {
+    if (strict) throw new Error("D1 binding is not configured");
+    return false;
+  }
   try {
     await env.DB.prepare(
       `INSERT INTO donations
@@ -201,6 +204,113 @@ export async function reconcileDonations(env: Env): Promise<void> {
       );
     }
   }
+}
+
+/**
+ * Recover donations whose row was never written (for example a Worker deployed
+ * without the D1 binding). Walks the KV sessions and backfills D1 from the
+ * payment API. Sessions that already have a row are skipped.
+ */
+export type ReconcileSummary = {
+  keys: number;
+  checked: number;
+  completed: number;
+  expired: number;
+  skipped: number;
+  errors: string[];
+};
+
+export async function reconcileSessions(
+  env: Env,
+): Promise<ReconcileSummary> {
+  const summary: ReconcileSummary = {
+    keys: 0,
+    checked: 0,
+    completed: 0,
+    expired: 0,
+    skipped: 0,
+    errors: [],
+  };
+  if (!env.DB) {
+    summary.errors.push("D1 binding is not configured");
+    return summary;
+  }
+
+  const listed = await env.SESSIONS.list({ prefix: "tg:", limit: 100 });
+  summary.keys = listed.keys.length;
+  const payment = paymentClient(env);
+
+  for (const key of listed.keys) {
+    if (!key.name.endsWith(":latest")) continue;
+    const userId = Number(key.name.split(":")[1]);
+    if (!Number.isInteger(userId) || userId <= 0) continue;
+    summary.checked++;
+
+    let session: Session;
+    try {
+      const raw = await env.SESSIONS.get(key.name);
+      if (!raw) {
+        summary.skipped++;
+        continue;
+      }
+      session = JSON.parse(raw) as Session;
+    } catch (error) {
+      summary.skipped++;
+      summary.errors.push(`${key.name}: ${errorMessage(error)}`);
+      continue;
+    }
+    if (!session.sessionId) {
+      summary.skipped++;
+      continue;
+    }
+
+    if (await getDonationBySession(env, session.sessionId)) {
+      summary.skipped++;
+      continue;
+    }
+
+    try {
+      const status = await payment.getCheckoutStatus(session.sessionId);
+      if (status.status === "completed") {
+        await ensureUser(env, userId);
+        await upsertDonation(
+          env,
+          {
+            userId,
+            sessionId: session.sessionId,
+            amountMinor: session.amountMinor,
+            gateway: "unknown",
+            status: "completed",
+            orderId: status.orderId,
+            completedAt: Date.now(),
+          },
+          true,
+        );
+        summary.completed++;
+      } else if (status.status === "expired") {
+        await ensureUser(env, userId);
+        await upsertDonation(
+          env,
+          {
+            userId,
+            sessionId: session.sessionId,
+            amountMinor: session.amountMinor,
+            gateway: "unknown",
+            status: "expired",
+          },
+          true,
+        );
+        summary.expired++;
+      } else {
+        summary.skipped++;
+        summary.errors.push(`${session.sessionId}: status=${status.status}`);
+      }
+    } catch (error) {
+      summary.errors.push(`${session.sessionId}: ${errorMessage(error)}`);
+    }
+  }
+
+  return summary;
 }
 
 /** Top donors aggregated by user across all completed donations. */

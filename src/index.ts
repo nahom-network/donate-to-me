@@ -1,6 +1,6 @@
 import type { Env, TgUpdate } from "./types";
 import { handleUpdate } from "./bot";
-import { reconcileDonations } from "./db";
+import { reconcileDonations, reconcileSessions } from "./db";
 import {
   checkWebhook,
   ensureBotProfile,
@@ -9,7 +9,7 @@ import {
   rememberWebhookUrl,
 } from "./health";
 import { handlePaymentWebhook } from "./webhooks";
-import { errorMessage, text } from "./util";
+import { errorMessage, json, text } from "./util";
 
 export default {
   async fetch(
@@ -27,6 +27,9 @@ export default {
     }
     if (url.pathname === "/telegram/repair") {
       return manualRepair(request, env);
+    }
+    if (url.pathname === "/admin/reconcile") {
+      return adminReconcile(request, env);
     }
 
     // Signed payment events from the payment provider.
@@ -97,5 +100,39 @@ export default {
         console.error("Donation reconciliation failed", errorMessage(error)),
       ),
     );
+    ctx.waitUntil(
+      reconcileSessions(env)
+        .then((summary) => {
+          if (summary.completed || summary.expired || summary.errors.length) {
+            console.log("Session reconciliation", JSON.stringify(summary));
+          }
+        })
+        .catch((error) =>
+          console.error("Session reconciliation failed", errorMessage(error)),
+        ),
+    );
   },
 };
+
+/**
+ * POST /admin/reconcile
+ * Backfills donations from KV sessions and pending donation rows. Protected by
+ * ADMIN_SECRET (or the Telegram webhook secret).
+ */
+async function adminReconcile(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  if (request.method !== "POST") return text("Method not allowed", 405);
+  const provided = request.headers.get("X-Admin-Secret") ?? "";
+  const expected = env.ADMIN_SECRET || env.TELEGRAM_WEBHOOK_SECRET || "";
+  if (!expected || provided !== expected) return text("Unauthorized", 401);
+
+  try {
+    const sessions = await reconcileSessions(env);
+    await reconcileDonations(env);
+    return json({ ok: true, sessions });
+  } catch (error) {
+    return json({ ok: false, error: errorMessage(error) }, 500);
+  }
+}

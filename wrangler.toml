@@ -7,7 +7,7 @@ binding = "SESSIONS"
 id = "fc930c8001184e33a1c639bb7203971c"
 
 [[d1_databases]]
-binding = "donate_to_me"
+binding = "DB"
 database_name = "donate-to-me"
 database_id = "e05cc09a-c942-4703-a7fb-0340dc44e399"
 

@@ -416,6 +416,9 @@ pnpm exec wrangler d1 delete donate-to-me
 - Payment webhook returns `503` → `JAMI_WEBHOOK_SECRET` is not set (step 7b).
 - Payment webhook returns `400` → the signature was calculated over a body that differs from the raw request, or the endpoint secret is wrong.
 - A payment succeeds but the bot is not notified → check the provider's Webhooks page for the delivery response; the cron and `/status` still reconcile the donation.
+- A completed donation is missing from `/halloffame` → check `/health` for `databaseConfigured: true`, then run the manual reconcile:
+  `curl -X POST "https://<HOST>/admin/reconcile" -H "X-Admin-Secret: <ADMIN_SECRET>"`.
+  The 15-minute cron also backfills from KV sessions once the binding is correct.
 - Deploy succeeds but the bot replies "Payment setup incomplete" → `JAMI_PRODUCT_ID` is still `REPLACE_...` or `JAMI_TOKEN` is unset.
 - Bot does not answer at all → `curl /health`, check `wrangler tail`, and confirm the webhook URL is the current hostname.
 - Responses stop after a while → run `POST /telegram/repair` and check `/health`; the 15-minute cron will also self-heal a lost webhook. If the Worker is on the free plan, confirm you have not hit the daily request limit in the dashboard.

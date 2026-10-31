@@ -23,6 +23,7 @@ import {
   sessionKey,
 } from "./session";
 import {
+  getDonationBySession,
   getHallOfFame,
   markDonationCompleted,
   markDonationExpired,
@@ -568,7 +569,22 @@ async function showStatus(
   const status = await payment.getCheckoutStatus(session.sessionId);
   if (status.status === "completed") {
     try {
-      await markDonationCompleted(env, session.sessionId, status.orderId);
+      const existing = await getDonationBySession(env, session.sessionId);
+      if (existing) {
+        await markDonationCompleted(env, session.sessionId, status.orderId);
+      } else {
+        // The row can be missing if this session was created before D1 was
+        // available; backfill it so the donor appears in the hall of fame.
+        await upsertDonation(env, {
+          userId,
+          sessionId: session.sessionId,
+          amountMinor: session.amountMinor,
+          gateway: "unknown",
+          status: "completed",
+          orderId: status.orderId,
+          completedAt: Date.now(),
+        });
+      }
     } catch (error) {
       console.error("Could not record completed donation", errorMessage(error));
     }

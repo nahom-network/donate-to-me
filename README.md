@@ -97,6 +97,18 @@ The payer's phone number and the payment API key are not stored in D1. The phone
 
 The handler verifies `X-JamiDev-Signature` against the **raw** request body using `JAMI_WEBHOOK_SECRET`, returns `400` on a bad signature, and skips repeated event ids. `/status` polling and the 15-minute cron remain as fallbacks, so a missed delivery still reconciles.
 
+### Recovering missed donations
+
+The 15-minute cron also walks the KV sessions and backfills any checkout that has no `donations` row yet, so a Worker deployed without the D1 binding does not lose donations. To run it immediately:
+
+```sh
+pnpm exec wrangler secret put ADMIN_SECRET
+curl -X POST "https://<YOUR_WORKER_HOST>/admin/reconcile" \
+  -H "X-Admin-Secret: <ADMIN_SECRET>"
+```
+
+The response reports how many sessions were checked, completed, expired, or skipped, with any errors. The Telegram webhook secret also works as the admin secret.
+
 ## Project structure
 
 | File | Purpose |
