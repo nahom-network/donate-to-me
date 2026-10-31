@@ -24,14 +24,14 @@ The steps below explain each command, its output, and how to check it worked.
 
 ## 0. What you need
 
-| Thing | Where to get it | Where it goes |
-| --- | --- | --- |
-| Cloudflare account | <https://dash.cloudflare.com/sign-up> | `wrangler login` |
-| Telegram bot token | [@BotFather](https://t.me/BotFather) → `/newbot` | Secret `TELEGRAM_BOT_TOKEN` |
-| Webhook secret | You generate a random string | Secret `TELEGRAM_WEBHOOK_SECRET` (same value in `setWebhook`) |
-| Jami API token | JamiDev dashboard → Developer → API Tokens | Secret `JAMI_TOKEN` |
-| Jami product ID | JamiDev → create a **pay-what-you-want** product | Var `JAMI_PRODUCT_ID` |
-| KV namespace | Created in step 3 | `wrangler.toml` |
+| Thing              | Where to get it                                  | Where it goes                                                 |
+| ------------------ | ------------------------------------------------ | ------------------------------------------------------------- |
+| Cloudflare account | <https://dash.cloudflare.com/sign-up>            | `wrangler login`                                              |
+| Telegram bot token | [@BotFather](https://t.me/BotFather) → `/newbot` | Secret `TELEGRAM_BOT_TOKEN`                                   |
+| Webhook secret     | You generate a random string                     | Secret `TELEGRAM_WEBHOOK_SECRET` (same value in `setWebhook`) |
+| Jami API token     | JamiDev dashboard → Developer → API Tokens       | Secret `JAMI_TOKEN`                                           |
+| Jami product ID    | JamiDev → create a **pay-what-you-want** product | Var `JAMI_PRODUCT_ID`                                         |
+| KV namespace       | Created in step 3                                | `wrangler.toml`                                               |
 
 Also install Node.js 20+ and pnpm 9+.
 
@@ -69,7 +69,7 @@ pnpm exec wrangler kv namespace create SESSIONS
 It prints something like:
 
 ```
-🌀 Creating namespace with title "jami-telegram-donations-SESSIONS"
+🌀 Creating namespace with title "donate-to-me-SESSIONS"
 ✨ Success!
 Add the following to your configuration file in your kv_namespaces array:
 [[kv_namespaces]]
@@ -99,7 +99,7 @@ You only need **one** namespace. The Worker stores one session key per Telegram 
 The file must look like this when you are done (keep your own IDs):
 
 ```toml
-name = "jami-telegram-donations"
+name = "donate-to-me"
 main = "src/index.ts"
 compatibility_date = "2026-10-06"
 
@@ -111,7 +111,7 @@ id = "<the id from step 3>"
 JAMI_PRODUCT_ID = "p_xxxxxxxx"          # your pay-what-you-want product
 DONATION_AMOUNTS = "50,100,250,500"     # optional, ETB
 # Optional but recommended. The public URL used by the 15-minute watchdog.
-# WEBHOOK_URL = "https://jami-telegram-donations.<your-subdomain>.workers.dev/telegram/webhook"
+# WEBHOOK_URL = "https://donate-to-me.<your-subdomain>.workers.dev/telegram/webhook"
 
 [triggers]
 crons = ["*/15 * * * *"]
@@ -165,7 +165,7 @@ pnpm run deploy
 `deploy` prints the Worker URL, for example:
 
 ```
-https://jami-telegram-donations.your-subdomain.workers.dev
+https://donate-to-me.your-subdomain.workers.dev
 ```
 
 Use that host in the next step. If you deploy with a custom domain or a route, use that URL instead.
@@ -238,17 +238,17 @@ A healthy response looks like:
 }
 ```
 
-Then open the bot in Telegram and send `/start`. You should get the amount keyboard. Pick an amount, pick a gateway, and follow the Jami checkout. Use `/status` after paying.
+Then open the bot in Telegram and send `/start`. You should get the amount keyboard. Pick an amount, pick a gateway, then share the mobile number registered with that account (use the **Share my phone number** button or type `0912345678`) — Jami needs it to send the payment prompt. Follow the Jami checkout, then use `/status` after paying.
 
 If `/health` is not `ok`:
 
-| `status` / field | Meaning | Fix |
-| --- | --- | --- |
-| `misconfigured` with `missingConfig` | A secret or the product ID is missing/placeholder | Rerun step 5 / step 4 |
-| `degraded`, `problem: "no webhook registered"` | Telegram has no webhook | Repeat step 7 |
-| `degraded`, `problem: "webhook points at a different URL"` | Hostname changed or `WEBHOOK_URL` is stale | Fix `WEBHOOK_URL` or repeat step 7 |
-| `degraded`, `lastErrorMessage` includes `401`/`403`/`404` | Secret or URL out of sync | Repair (below) |
-| `error` | The Worker could not reach Telegram | Check the bot token and `wrangler tail` |
+| `status` / field                                           | Meaning                                           | Fix                                     |
+| ---------------------------------------------------------- | ------------------------------------------------- | --------------------------------------- |
+| `misconfigured` with `missingConfig`                       | A secret or the product ID is missing/placeholder | Rerun step 5 / step 4                   |
+| `degraded`, `problem: "no webhook registered"`             | Telegram has no webhook                           | Repeat step 7                           |
+| `degraded`, `problem: "webhook points at a different URL"` | Hostname changed or `WEBHOOK_URL` is stale        | Fix `WEBHOOK_URL` or repeat step 7      |
+| `degraded`, `lastErrorMessage` includes `401`/`403`/`404`  | Secret or URL out of sync                         | Repair (below)                          |
+| `error`                                                    | The Worker could not reach Telegram               | Check the bot token and `wrangler tail` |
 
 Repair without waiting for the cron job:
 
