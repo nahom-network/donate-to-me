@@ -25,10 +25,10 @@ import { paymentClient, type CheckoutResult } from "./payment";
 import {
   claimUpdate,
   clearPending,
+  deleteCheckoutMessage,
   getPending,
   pendingKey,
   sessionKey,
-  updateCheckoutMessage,
 } from "./session";
 import {
   getDonationBySession,
@@ -647,7 +647,7 @@ async function showStatus(
           status.orderId,
         );
         if (changed) {
-          await updateCheckoutMessage(env, userId, session.sessionId, message);
+          await deleteCheckoutMessage(env, userId, session.sessionId);
         }
       } else {
         // The row can be missing if this session was created before D1 was
@@ -661,7 +661,7 @@ async function showStatus(
           orderId: status.orderId,
           completedAt: Date.now(),
         });
-        await updateCheckoutMessage(env, userId, session.sessionId, message);
+        await deleteCheckoutMessage(env, userId, session.sessionId);
       }
     } catch (error) {
       console.error("Could not record completed donation", errorMessage(error));
@@ -671,12 +671,7 @@ async function showStatus(
     try {
       const changed = await markDonationExpired(env, session.sessionId);
       if (changed) {
-        await updateCheckoutMessage(
-          env,
-          userId,
-          session.sessionId,
-          "⌛ That checkout expired. Send /donate to try again.",
-        );
+        await deleteCheckoutMessage(env, userId, session.sessionId);
       }
     } catch (error) {
       console.error("Could not record expired donation", errorMessage(error));

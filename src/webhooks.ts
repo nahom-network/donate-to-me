@@ -13,7 +13,7 @@ import {
   upsertDonation,
 } from "./db";
 import { sendMessage } from "./telegram";
-import { updateCheckoutMessage } from "./session";
+import { deleteCheckoutMessage } from "./session";
 import { errorMessage, escapeHtml, formatEtb, json } from "./util";
 
 type Notification = { userId: number; sessionId: string; text: string };
@@ -188,14 +188,9 @@ function expiredText(
 }
 
 async function notifyDonor(env: Env, info: Notification): Promise<void> {
-  // Replace the "approve / open checkout" prompt with the final result, then
-  // send a fresh message so the payer still gets a push notification.
-  await updateCheckoutMessage(
-    env,
-    info.userId,
-    info.sessionId,
-    info.text,
-  );
+  // Delete the "approve / open checkout" prompt and send the result once, so
+  // the same text never appears twice in the chat.
+  await deleteCheckoutMessage(env, info.userId, info.sessionId);
   try {
     await sendMessage(env, info.userId, info.text);
   } catch (error) {

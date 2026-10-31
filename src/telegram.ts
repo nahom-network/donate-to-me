@@ -109,14 +109,16 @@ export async function deleteMessage(
   env: Env,
   chatId: number,
   messageId: number,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await telegram(env, "deleteMessage", {
       chat_id: chatId,
       message_id: messageId,
     });
+    return true;
   } catch (error) {
     console.warn("Could not delete message", errorMessage(error));
+    return false;
   }
 }
 

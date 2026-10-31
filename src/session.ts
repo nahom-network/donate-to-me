@@ -4,7 +4,7 @@ import {
   PENDING_TTL_SECONDS,
   UPDATE_DEDUPE_TTL_SECONDS,
 } from "./constants";
-import { editMessageText } from "./telegram";
+import { deleteMessage, editMessageText } from "./telegram";
 import { errorMessage } from "./util";
 
 export function sessionKey(userId: number): string {
@@ -13,6 +13,41 @@ export function sessionKey(userId: number): string {
 
 export function pendingKey(userId: number): string {
   return `tg:${userId}:pending`;
+}
+
+/**
+ * Remove the checkout prompt instead of leaving a dead "approve / open
+ * checkout" message. Used when a separate result message is about to be sent,
+ * so the payer sees the result exactly once.
+ */
+export async function deleteCheckoutMessage(
+  env: Env,
+  userId: number,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    const raw = await env.SESSIONS.get(sessionKey(userId));
+    if (!raw) return false;
+    const session = JSON.parse(raw) as Session;
+    if (session.sessionId !== sessionId || !session.checkoutMessageId) {
+      return false;
+    }
+    const deleted = await deleteMessage(
+      env,
+      userId,
+      session.checkoutMessageId,
+    );
+    if (deleted) {
+      delete session.checkoutMessageId;
+      await env.SESSIONS.put(sessionKey(userId), JSON.stringify(session), {
+        expirationTtl: 86400,
+      });
+    }
+    return deleted;
+  } catch (error) {
+    console.warn("Could not delete checkout message", errorMessage(error));
+    return false;
+  }
 }
 
 /**
