@@ -29,17 +29,9 @@ import {
   recordUser,
   upsertDonation,
 } from "./db";
-import {
-  errorMessage,
-  escapeHtml,
-  formatEtb,
-  gatewayLabel,
-} from "./util";
+import { errorMessage, escapeHtml, formatEtb, gatewayLabel } from "./util";
 
-export async function handleUpdate(
-  update: TgUpdate,
-  env: Env,
-): Promise<void> {
+export async function handleUpdate(update: TgUpdate, env: Env): Promise<void> {
   try {
     if (
       update.update_id !== undefined &&
@@ -365,9 +357,9 @@ async function completeCheckout(
       amount: pending.amount * 100,
       // The payment API requires an email on the customer record. Telegram
       // users don't have one here, so use a stable per-user placeholder
-      // (example.com is reserved). The phone is the real payment number.
+      // (donate_to_me_bot.t.me is reserved). The phone is the real payment number.
       customer: {
-        email: `tg${userId}@example.com`,
+        email: `tg${userId}@donate_to_me_bot.t.me`,
         phone,
         externalId: String(userId),
       },
@@ -615,7 +607,8 @@ function isHallOfFameCommand(command: string | undefined) {
 }
 
 async function showHallOfFame(chatId: number, env: Env) {
-  const header = "🏆 <b>HALL OF FAME</b>\n<i>Top supporters · all-time total</i>";
+  const header =
+    "🏆 <b>HALL OF FAME</b>\n<i>Top supporters · all-time total</i>";
 
   try {
     const rows = await getHallOfFame(env, 3);

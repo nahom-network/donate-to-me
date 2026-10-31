@@ -7,9 +7,9 @@ binding = "SESSIONS"
 id = "fc930c8001184e33a1c639bb7203971c"
 
 [[d1_databases]]
-binding = "DB"
+binding = "donate_to_me"
 database_name = "donate-to-me"
-database_id = "dcd6031b-8b5a-4457-8829-56248e3a9a28"
+database_id = "e05cc09a-c942-4703-a7fb-0340dc44e399"
 
 [vars]
 JAMI_PRODUCT_ID = "p_JNNaCND81yLE"
@@ -34,7 +34,3 @@ persist = true
 enabled = true
 head_sampling_rate = 1
 persist = true
-
-[observability.issue_detection]
-enabled = true
-# ...
