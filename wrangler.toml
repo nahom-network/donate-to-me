@@ -1,0 +1,19 @@
+name = "jami-telegram-donations"
+main = "src/index.ts"
+compatibility_date = "2026-10-06"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+JAMI_PRODUCT_ID = "REPLACE_WITH_PAY_WHAT_YOU_WANT_PRODUCT_ID"
+# Optional comma-separated donation amounts in ETB.
+DONATION_AMOUNTS = "50,100,250,500"
+# Optional but recommended: the public URL of this Worker's webhook. The bot
+# reports it at /health and re-registers it automatically if Telegram loses it.
+# WEBHOOK_URL = "https://jami-telegram-donations.<your-subdomain>.workers.dev/telegram/webhook"
+
+# Watchdog: checks the Telegram webhook every 15 minutes and repairs it.
+[triggers]
+crons = ["*/15 * * * *"]

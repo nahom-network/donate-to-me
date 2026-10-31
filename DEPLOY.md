@@ -1,0 +1,339 @@
+# Deploying the bot
+
+A complete, from-zero deployment guide: Cloudflare login, KV namespace, secrets, deploy, Telegram webhook, and verification. Commands assume you are in the project folder.
+
+The bot runs on Cloudflare Workers. You need one KV namespace (short-lived checkout sessions), three Worker secrets, and two plain variables.
+
+## Quick path (TL;DR)
+
+```sh
+pnpm install
+pnpm exec wrangler login
+pnpm exec wrangler kv namespace create SESSIONS   # copy the id into wrangler.toml
+# edit wrangler.toml: KV id + JAMI_PRODUCT_ID
+pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN
+pnpm exec wrangler secret put TELEGRAM_WEBHOOK_SECRET
+pnpm exec wrangler secret put JAMI_TOKEN
+pnpm run deploy
+# then, with the host from the deploy output:
+curl.exe -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" --data-urlencode "url=https://<HOST>/telegram/webhook" --data-urlencode "secret_token=<SECRET>"
+curl.exe https://<HOST>/health
+```
+
+The steps below explain each command, its output, and how to check it worked.
+
+## 0. What you need
+
+| Thing | Where to get it | Where it goes |
+| --- | --- | --- |
+| Cloudflare account | <https://dash.cloudflare.com/sign-up> | `wrangler login` |
+| Telegram bot token | [@BotFather](https://t.me/BotFather) → `/newbot` | Secret `TELEGRAM_BOT_TOKEN` |
+| Webhook secret | You generate a random string | Secret `TELEGRAM_WEBHOOK_SECRET` (same value in `setWebhook`) |
+| Jami API token | JamiDev dashboard → Developer → API Tokens | Secret `JAMI_TOKEN` |
+| Jami product ID | JamiDev → create a **pay-what-you-want** product | Var `JAMI_PRODUCT_ID` |
+| KV namespace | Created in step 3 | `wrangler.toml` |
+
+Also install Node.js 20+ and pnpm 9+.
+
+## 1. Install dependencies
+
+```sh
+pnpm install
+```
+
+## 2. Log in to Cloudflare
+
+```sh
+pnpm exec wrangler login
+pnpm exec wrangler whoami
+```
+
+`whoami` should print your account name and ID. If you belong to several accounts, note the correct Account ID and pass it when needed, or set it once:
+
+```sh
+# PowerShell
+$env:CLOUDFLARE_ACCOUNT_ID = "<account-id>"
+
+# bash
+export CLOUDFLARE_ACCOUNT_ID="<account-id>"
+```
+
+For CI, skip `login` and export a `CLOUDFLARE_API_TOKEN` with the **Edit Cloudflare Workers** template instead.
+
+## 3. Create the KV namespace
+
+```sh
+pnpm exec wrangler kv namespace create SESSIONS
+```
+
+It prints something like:
+
+```
+🌀 Creating namespace with title "jami-telegram-donations-SESSIONS"
+✨ Success!
+Add the following to your configuration file in your kv_namespaces array:
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "0f2a1b3c4d5e6f7a8b9c0d1e2f3a4b5c"
+```
+
+Copy the `id` value. Open `wrangler.toml` and replace the placeholder:
+
+```toml
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "0f2a1b3c4d5e6f7a8b9c0d1e2f3a4b5c"
+```
+
+Useful related commands:
+
+```sh
+pnpm exec wrangler kv namespace list        # find an existing namespace id
+pnpm exec wrangler kv key list --binding SESSIONS --remote   # inspect stored keys (optional)
+```
+
+You only need **one** namespace. The Worker stores one session key per Telegram user with a 24-hour TTL, plus a short-lived update-id dedupe key.
+
+## 4. Fill in `wrangler.toml`
+
+The file must look like this when you are done (keep your own IDs):
+
+```toml
+name = "jami-telegram-donations"
+main = "src/index.ts"
+compatibility_date = "2026-10-06"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "<the id from step 3>"
+
+[vars]
+JAMI_PRODUCT_ID = "p_xxxxxxxx"          # your pay-what-you-want product
+DONATION_AMOUNTS = "50,100,250,500"     # optional, ETB
+# Optional but recommended. The public URL used by the 15-minute watchdog.
+# WEBHOOK_URL = "https://jami-telegram-donations.<your-subdomain>.workers.dev/telegram/webhook"
+
+[triggers]
+crons = ["*/15 * * * *"]
+```
+
+Notes:
+
+- `DONATION_AMOUNTS` is a comma-separated list of whole ETB amounts. Invalid entries are ignored; if none survive, the defaults `50,100,250,500` are used.
+- `WEBHOOK_URL` must be the exact URL you register in step 7 and must end in `/telegram/webhook`. Setting it lets the watchdog restore a webhook that was deleted before the Worker ever saw an update. If omitted, the Worker learns its URL from the first update it receives.
+- The cron trigger is part of the file, so it is created by the first deploy. No dashboard action is needed.
+
+## 5. Set the Worker secrets
+
+Secrets are encrypted and never appear in `wrangler.toml`. Run each command and paste the value when prompted (input is hidden):
+
+```sh
+pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN
+pnpm exec wrangler secret put TELEGRAM_WEBHOOK_SECRET
+pnpm exec wrangler secret put JAMI_TOKEN
+```
+
+Generate a webhook secret (any random 1–256 characters from `A-Z a-z 0-9 _ -`; hex is safest):
+
+```powershell
+# PowerShell
+-join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+```
+
+```sh
+# bash / macOS
+openssl rand -hex 32
+```
+
+Check which secrets exist (values cannot be read back):
+
+```sh
+pnpm exec wrangler secret list
+```
+
+To replace a secret later, run `wrangler secret put` again with the new value. If you rotate `TELEGRAM_WEBHOOK_SECRET`, re-register the webhook (step 7) or run the repair endpoint, or the Worker will reject Telegram with `401`.
+
+> Use a Jami **test** token with a test-mode product while testing. Switch the secret to a live token only when you are ready to receive real money.
+
+## 6. Deploy
+
+```sh
+pnpm run typecheck
+pnpm run deploy
+```
+
+`deploy` prints the Worker URL, for example:
+
+```
+https://jami-telegram-donations.your-subdomain.workers.dev
+```
+
+Use that host in the next step. If you deploy with a custom domain or a route, use that URL instead.
+
+The deploy also creates the 15-minute cron trigger. Any later `pnpm run deploy` replaces the code but keeps the KV data, secrets, and cron.
+
+## 7. Register the Telegram webhook
+
+Telegram must be told where to send updates. The URL must be HTTPS and end in `/telegram/webhook`, and `secret_token` must exactly match `TELEGRAM_WEBHOOK_SECRET`.
+
+Windows (PowerShell 5.1/7) — use `curl.exe`, not the `curl` alias:
+
+```powershell
+curl.exe -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" `
+  --data-urlencode "url=https://<YOUR_WORKER_HOST>/telegram/webhook" `
+  --data-urlencode "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+Linux / macOS:
+
+```sh
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  --data-urlencode "url=https://<YOUR_WORKER_HOST>/telegram/webhook" \
+  --data-urlencode "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+Expected response: `{"ok":true,"result":true,"description":"Webhook was set"}`.
+
+Verify what Telegram now believes:
+
+```sh
+curl.exe "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
+```
+
+You want:
+
+- `"url"` equal to your webhook URL,
+- `"pending_update_count"` at or near `0`,
+- no `last_error_message` (a stale one is fine if it is old and the bot works).
+
+You only need to repeat this step when the Worker hostname changes, or when you rotate the webhook secret.
+
+## 8. Verify the deployment
+
+Check the Worker's own view of Telegram:
+
+```sh
+curl.exe https://<YOUR_WORKER_HOST>/health
+```
+
+A healthy response looks like:
+
+```json
+{
+  "status": "ok",
+  "problem": null,
+  "missingConfig": [],
+  "config": {
+    "webhookSecretConfigured": true,
+    "jamiTokenConfigured": true,
+    "productConfigured": true
+  },
+  "webhook": {
+    "url": "https://<host>/telegram/webhook",
+    "expectedUrl": "https://<host>/telegram/webhook",
+    "pendingUpdateCount": 0,
+    "lastErrorDate": null,
+    "lastErrorMessage": null
+  }
+}
+```
+
+Then open the bot in Telegram and send `/start`. You should get the amount keyboard. Pick an amount, pick a gateway, and follow the Jami checkout. Use `/status` after paying.
+
+If `/health` is not `ok`:
+
+| `status` / field | Meaning | Fix |
+| --- | --- | --- |
+| `misconfigured` with `missingConfig` | A secret or the product ID is missing/placeholder | Rerun step 5 / step 4 |
+| `degraded`, `problem: "no webhook registered"` | Telegram has no webhook | Repeat step 7 |
+| `degraded`, `problem: "webhook points at a different URL"` | Hostname changed or `WEBHOOK_URL` is stale | Fix `WEBHOOK_URL` or repeat step 7 |
+| `degraded`, `lastErrorMessage` includes `401`/`403`/`404` | Secret or URL out of sync | Repair (below) |
+| `error` | The Worker could not reach Telegram | Check the bot token and `wrangler tail` |
+
+Repair without waiting for the cron job:
+
+```powershell
+curl.exe -X POST "https://<YOUR_WORKER_HOST>/telegram/repair" `
+  -H "X-Telegram-Bot-Api-Secret-Token: <TELEGRAM_WEBHOOK_SECRET>"
+```
+
+Add `?drop=1` to the URL to discard a stale backlog of updates.
+
+## 9. Watch logs
+
+```sh
+pnpm exec wrangler tail
+```
+
+Send a message to the bot while it is running. You will see update processing and any Telegram/Jami errors. `wrangler tail --status error` shows only failures.
+
+In the Cloudflare dashboard, the Worker also has **Logs** and **Metrics** tabs.
+
+## Local development
+
+Create `.dev.vars` in the project root (already git-ignored) with local values:
+
+```ini
+TELEGRAM_BOT_TOKEN=123456:your-dev-bot-token
+TELEGRAM_WEBHOOK_SECRET=some-local-secret
+JAMI_TOKEN=jamidev_test_...
+JAMI_PRODUCT_ID=p_test_product
+```
+
+`wrangler dev` only reads secrets from `.dev.vars` — dashboard secrets are not downloaded.
+
+```sh
+pnpm run dev
+```
+
+This starts <http://127.0.0.1:8787> with a simulated local KV namespace; the placeholder KV id in `wrangler.toml` is fine locally.
+
+Telegram cannot reach `localhost`. To exercise the real webhook flow you need either a tunnel (e.g. `cloudflared tunnel --url http://127.0.0.1:8787`) registered with `setWebhook`, or a deployed staging Worker. A tunnel URL changes when it restarts, so re-register the webhook each time.
+
+The cron watchdog does not run automatically in local dev. Trigger it manually:
+
+```sh
+curl.exe "http://127.0.0.1:8787/cdn-cgi/local/scheduled"
+```
+
+## Updating and redeploying
+
+```sh
+pnpm run typecheck
+pnpm run deploy
+```
+
+- Code changes: redeploy. KV data, secrets, and the webhook stay as they are.
+- Variable changes in `wrangler.toml`: redeploy.
+- Secret changes: `wrangler secret put <NAME>` (effective immediately).
+- New hostname: repeat step 7 and update `WEBHOOK_URL`.
+
+## Rotating a leaked token
+
+1. Rotate it in the provider (BotFather `/revoke` for Telegram, JamiDev dashboard for Jami).
+2. `pnpm exec wrangler secret put <NAME>` with the new value.
+3. For Telegram, either repair (`POST /telegram/repair`) or repeat step 7 so the webhook uses the new secret.
+
+## Tearing it all down (optional, destructive)
+
+Do this only if you really want to remove the bot:
+
+```sh
+# Stop Telegram deliveries first
+curl.exe -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/deleteWebhook"
+
+# Delete the Worker (code + cron + secrets)
+pnpm exec wrangler delete
+
+# Delete the KV namespace (check the id with `kv namespace list`)
+pnpm exec wrangler kv namespace delete --namespace-id <kv-namespace-id>
+```
+
+## Troubleshooting checklist
+
+- `pnpm install` fails with `ETARGET` → old `@cloudflare/workers-types` pins. This repo uses `^5.x`; run `pnpm install` from the project root, not from inside `node_modules`.
+- `wrangler deploy` says the KV namespace id is invalid → step 3 was skipped or the id was pasted with quotes/whitespace.
+- Deploy succeeds but the bot replies "Payment setup incomplete" → `JAMI_PRODUCT_ID` is still `REPLACE_...` or `JAMI_TOKEN` is unset.
+- Bot does not answer at all → `curl /health`, check `wrangler tail`, and confirm the webhook URL is the current hostname.
+- Responses stop after a while → run `POST /telegram/repair` and check `/health`; the 15-minute cron will also self-heal a lost webhook. If the Worker is on the free plan, confirm you have not hit the daily request limit in the dashboard.
+- Telegram reports `401 Unauthorized` errors → `TELEGRAM_WEBHOOK_SECRET` and the `secret_token` passed to `setWebhook` differ.
