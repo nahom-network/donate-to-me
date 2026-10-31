@@ -1,6 +1,9 @@
 # Donate to me
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/nahom-network/donate-to-me)
+[![Telegram](https://img.shields.io/badge/Telegram-@donate__to__me__bot-26A5E4?logo=telegram&logoColor=white)](https://t.me/donate_to_me_bot)
+
+**Support the project:** use the live bot at [@donate_to_me_bot](https://t.me/donate_to_me_bot).
 
 A small Telegram bot that lets people choose a donation amount, select Telebirr, M-Pesa, or CBE Birr, and pay through a secure hosted checkout. It runs on Cloudflare Workers. It does not use OCR or collect transaction IDs.
 
