@@ -110,18 +110,23 @@ async function onMessage(message: TgMessage, env: Env) {
 
   if (isHallOfFameCommand(command)) return showHallOfFame(chatId, env);
 
-  if (command === "start" || command === "donate") {
-    if (userId) {
-      const pending = await getPending(env, userId);
-      if (pending?.promptMessageId) {
-        await deleteMessage(env, chatId, pending.promptMessageId);
-      }
-      await clearPending(env, userId);
-    }
+  if (command === "start") {
+    await resetPending(env, chatId, userId);
     return sendMessage(
       env,
       chatId,
-      `Selam${name}! You can support me with a secure checkout. Choose a donation amount in ETB:`,
+      `Selam${name}! 👋\n\n` +
+        `This bot lets you support me with a secure donation via Telebirr, M-Pesa, or CBE Birr.\n\n` +
+        `Tap <b>Donate</b> to choose an amount.`,
+      startKeyboard(),
+    );
+  }
+  if (command === "donate") {
+    await resetPending(env, chatId, userId);
+    return sendMessage(
+      env,
+      chatId,
+      "Choose a donation amount in ETB:",
       amountKeyboard(env),
     );
   }
@@ -186,6 +191,21 @@ function amountKeyboard(env: Env) {
   return { inline_keyboard: rows };
 }
 
+function startKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Donate 🫴", callback_data: "donate", style: "success" }],
+      [
+        {
+          text: "⭐ Open source on GitHub",
+          url: "https://github.com/nahom-network/donate-to-me",
+          style: "primary",
+        },
+      ],
+    ] satisfies InlineButton[][],
+  };
+}
+
 async function onCallback(query: TgCallback, env: Env) {
   const chatId = query.message?.chat.id;
   const messageId = query.message?.message_id;
@@ -210,22 +230,13 @@ async function onCallback(query: TgCallback, env: Env) {
     return cancelDonation(env, chatId, userId, messageId);
   }
 
-  if (query.data === "back") {
+  if (query.data === "donate" || query.data === "back") {
+    await resetPending(env, chatId, userId);
+    const text = "Choose a donation amount in ETB:";
     if (messageId) {
-      return editMessageText(
-        env,
-        chatId,
-        messageId,
-        "Choose a donation amount in ETB:",
-        amountKeyboard(env),
-      );
+      return editMessageText(env, chatId, messageId, text, amountKeyboard(env));
     }
-    return sendMessage(
-      env,
-      chatId,
-      "Choose a donation amount in ETB:",
-      amountKeyboard(env),
-    );
+    return sendMessage(env, chatId, text, amountKeyboard(env));
   }
 
   if (query.data === "status") {
@@ -246,7 +257,7 @@ async function onCallback(query: TgCallback, env: Env) {
       },
     ]);
     rows.push([
-      { text: "← Back", callback_data: "back", style: "primary" },
+      { text: "← Back", callback_data: "back", style: "success" },
       { text: "Cancel", callback_data: "cancel", style: "danger" },
     ]);
     const text = `You chose <b>${formatEtb(amount)}</b>. Select how you’d like to pay:`;
@@ -466,7 +477,7 @@ async function completeCheckout(
             {
               text: "I’ve paid — check status",
               callback_data: "status",
-              style: "primary",
+              style: "success",
             },
           ],
         ] satisfies InlineButton[][],
@@ -483,7 +494,7 @@ async function completeCheckout(
             {
               text: "I’ve paid — check status",
               callback_data: "status",
-              style: "primary",
+              style: "success",
             },
           ],
         ] satisfies InlineButton[][],
@@ -498,19 +509,27 @@ async function completeCheckout(
   }
 }
 
+/** Drop any pending gateway choice and its ForceReply prompt. */
+async function resetPending(
+  env: Env,
+  chatId: number,
+  userId: number | undefined,
+) {
+  if (!userId) return;
+  const pending = await getPending(env, userId);
+  if (pending?.promptMessageId) {
+    await deleteMessage(env, chatId, pending.promptMessageId);
+  }
+  await clearPending(env, userId);
+}
+
 async function cancelDonation(
   env: Env,
   chatId: number,
   userId: number | undefined,
   messageId?: number,
 ) {
-  if (userId) {
-    const pending = await getPending(env, userId);
-    if (pending?.promptMessageId) {
-      await deleteMessage(env, chatId, pending.promptMessageId);
-    }
-    await clearPending(env, userId);
-  }
+  await resetPending(env, chatId, userId);
   if (messageId) {
     return editMessageText(
       env,
