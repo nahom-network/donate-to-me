@@ -13,7 +13,8 @@ A small Telegram bot that lets people choose a donation amount, select Telebirr,
    - Telebirr and CBE Birr: an Ethio Telecom number starting with `09` or `+2519` (e.g. `0912345678`).
 
    The payment provider requires the number to send the payment request. The bot forwards it for that checkout and does not store it.
-4. Open the secure checkout (or approve the prompt on the phone), then tap **I’ve paid — check status** or send `/status`.
+4. Open the secure checkout (or approve the prompt on the phone). A signed webhook notifies the bot as soon as the payment completes, so it messages you automatically; you can also tap **I’ve paid — check status** or send `/status`.
+5. `/halloffame` shows the top three people by total completed donations, aggregated across all their donations (first names only, no usernames).
 
 Button colors use the `style` field added in Bot API 9.4 (blue = primary, green = success, red = danger). Older Telegram clients simply show their default button color.
 
@@ -22,8 +23,18 @@ Button colors use the `style` field added in Bot API 9.4 (blue = primary, green 
 1. In the payment provider dashboard, create a **pay-what-you-want** donation product and copy its product ID. Configure the receiving account there.
 2. Create a Telegram bot with BotFather and copy its bot token.
 3. Install Node.js 20 or later and run `pnpm install`.
-4. Create a KV namespace and put its ID in `wrangler.toml`.
-5. Set Worker secrets (do not paste these into source files):
+4. Create a KV namespace and put its ID in `wrangler.toml` under `[[kv_namespaces]]`.
+5. Create the D1 database and apply the schema:
+
+   ```sh
+   pnpm exec wrangler d1 create donate-to-me
+   # copy the database_id into wrangler.toml under [[d1_databases]]
+   pnpm run db:migrate
+   ```
+
+   The migration creates the `users` and `donations` tables. `db:migrate` targets the remote database; use `pnpm run db:migrate:local` for local development.
+
+6. Set Worker secrets (do not paste these into source files):
 
    ```sh
    pnpm exec wrangler secret put JAMI_TOKEN
@@ -33,9 +44,9 @@ Button colors use the `style` field added in Bot API 9.4 (blue = primary, green 
 
    The API token should be a test token while testing. Use a long random string for `TELEGRAM_WEBHOOK_SECRET`.
 
-6. Replace `JAMI_PRODUCT_ID` in `wrangler.toml` with the pay-what-you-want product ID. Adjust `DONATION_AMOUNTS` if desired. Amounts are ETB.
-7. Run locally with `pnpm run dev` or deploy with `pnpm run deploy`.
-8. Register the Telegram webhook after deployment:
+7. Replace `JAMI_PRODUCT_ID` in `wrangler.toml` with the pay-what-you-want product ID. Adjust `DONATION_AMOUNTS` if desired. Amounts are ETB.
+8. Run locally with `pnpm run dev` or deploy with `pnpm run deploy`.
+9. Register the Telegram webhook after deployment:
 
    ```sh
    curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
@@ -45,16 +56,60 @@ Button colors use the `style` field added in Bot API 9.4 (blue = primary, green 
 
    This step changes the Telegram bot's webhook. Do it only for a bot you control and when you're ready to receive updates.
 
+10. In the payment provider dashboard → **Automation → Webhooks**, add a new endpoint:
+
+    ```
+    https://<YOUR_WORKER_HOST>/webhooks/payments
+    ```
+
+    Subscribe it to `order.completed` and `checkout.session.expired`. Copy the endpoint secret and store it as a Worker secret:
+
+    ```sh
+    pnpm exec wrangler secret put JAMI_WEBHOOK_SECRET
+    ```
+
+    Secrets take effect immediately; no redeploy is needed.
+
 ## Chat commands
 
 - `/start` or `/donate` — choose an amount and payment rail.
 - `/status` — ask the payment provider for the latest checkout status. The status endpoint reconciles with the provider.
+- `/halloffame` (or `/top`, `/topdonors`) — show the top three donors by completed amount.
 - `/help` — show a short help message.
 - `/cancel` — cancel a checkout that is waiting for a phone number.
 
-The command menu is registered automatically (from the 15-minute cron job), so the Telegram menu shows `/donate`, `/status`, `/help`, and `/cancel`.
+The command menu is registered automatically (from the 15-minute cron job), so the Telegram menu shows `/donate`, `/status`, `/halloffame`, `/help`, and `/cancel`.
 
-The Worker keeps each Telegram user's latest checkout session in KV for up to 24 hours, and a pending gateway choice for 15 minutes while it waits for a phone number. It does not store the payment API key or the payer's phone number; the number is only forwarded to the payment provider to create the checkout. Telegram's webhook secret header is checked before processing updates.
+### What is stored
+
+- **D1 `users`** — everyone who interacts with the bot: Telegram id, first name, username, language code, first/last seen timestamps, and an interaction counter.
+- **D1 `donations`** — one row per checkout, linked to `users.id` by foreign key: amount, currency, gateway, status (`pending` / `completed` / `expired`), order reference, and timestamps. The `session_id` is unique, so retries cannot duplicate a donation.
+- **KV `SESSIONS`** — each user's latest checkout session for up to 24 hours, a pending gateway choice for 15 minutes while the bot waits for a phone number, and processed payment-webhook event ids for 7 days.
+
+The payer's phone number and the payment API key are not stored in D1. The phone is only forwarded to the payment provider to create the checkout. Telegram's webhook secret header is checked before processing updates.
+
+## Payment webhooks
+
+`POST /webhooks/payments` receives signed events from the payment provider:
+
+- `order.completed` — marks the matching donation `completed`, stores the order id, and messages the donor.
+- `checkout.session.expired` — marks a pending donation `expired`.
+
+The handler verifies `X-JamiDev-Signature` against the **raw** request body using `JAMI_WEBHOOK_SECRET`, returns `400` on a bad signature, and skips repeated event ids. `/status` polling and the 15-minute cron remain as fallbacks, so a missed delivery still reconciles.
+
+## Project structure
+
+| File | Purpose |
+| --- | --- |
+| `src/index.ts` | Worker entry: routes, Telegram webhook, cron |
+| `src/bot.ts` | Telegram updates, donation flow, `/halloffame` |
+| `src/webhooks.ts` | Signed payment webhook handler |
+| `src/db.ts` | D1 users, donations, reconciliation, leaderboard query |
+| `src/session.ts` | KV sessions, pending choices, update dedupe |
+| `src/payment.ts` | Payment API client with timeouts |
+| `src/telegram.ts` | Telegram API client with retries |
+| `src/health.ts` | `/health`, webhook watchdog, bot profile |
+| `src/constants.ts`, `src/types.ts`, `src/util.ts` | Shared constants, types, helpers |
 
 ## When the bot stops responding
 
@@ -80,12 +135,12 @@ curl -X POST "https://<YOUR_WORKER_HOST>/telegram/repair" \
 
 Add `?drop=1` to discard the stale backlog (use this if old messages keep arriving after a repair). For the watchdog to repair a webhook that was deleted before this Worker ever received an update, set `WEBHOOK_URL` in `wrangler.toml` to the same URL you registered with `setWebhook`; otherwise the Worker learns and remembers its URL from the first update it receives.
 
-If `/health` reports `no webhook registered` and you are redeploying to a new hostname, run the `setWebhook` call from step 8 again.
+If `/health` reports `no webhook registered` and you are redeploying to a new hostname, run the `setWebhook` call from step 9 again.
 
 One more thing to rule out: a bot started with `pnpm run dev` only answers while that local process (and any tunnel in front of it) is running. Once it is stopped, Telegram has nothing to deliver updates to. Deploy the Worker for a bot that must stay online.
 
 ## Test flow
 
-Use a test API key and a test-mode pay-what-you-want product. Send `/start` to the bot, choose an amount, select a gateway, then share a phone number that matches it (`07…` for M-Pesa, `09…` for Telebirr/CBE, or use the contact button). Open the checkout link, complete the sandbox flow, then send `/status`. Confirm both a pending state and a completed state. Also confirm that a mismatched prefix is rejected, check `/status` after an expired checkout, and try `/cancel` while the bot is waiting for the phone number.
+Use a test API key and a test-mode pay-what-you-want product. Send `/start` to the bot, choose an amount, select a gateway, then share a phone number that matches it (`07…` for M-Pesa, `09…` for Telebirr/CBE, or use the contact button). Open the checkout link and complete the sandbox flow. The bot should message you automatically when the webhook arrives, without sending `/status`. Confirm both a pending state and a completed state, and that `/halloffame` lists the donor with their aggregated total. Also confirm that a mismatched prefix is rejected, check `/status` after an expired checkout, and try `/cancel` while the bot is waiting for the phone number.
 
 If the test key shared in chat is used outside this private test, rotate it in the provider dashboard and set the replacement as the Worker secret.

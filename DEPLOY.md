@@ -2,7 +2,7 @@
 
 A complete, from-zero deployment guide: Cloudflare login, KV namespace, secrets, deploy, Telegram webhook, and verification. Commands assume you are in the project folder.
 
-The bot runs on Cloudflare Workers. You need one KV namespace (short-lived checkout sessions), three Worker secrets, and two plain variables.
+The bot runs on Cloudflare Workers. You need one KV namespace (short-lived checkout sessions), one D1 database (users and donations), three Worker secrets, and two plain variables.
 
 ## Quick path (TL;DR)
 
@@ -10,13 +10,17 @@ The bot runs on Cloudflare Workers. You need one KV namespace (short-lived check
 pnpm install
 pnpm exec wrangler login
 pnpm exec wrangler kv namespace create SESSIONS   # copy the id into wrangler.toml
-# edit wrangler.toml: KV id + JAMI_PRODUCT_ID
+pnpm exec wrangler d1 create donate-to-me         # copy the database_id into wrangler.toml
+# edit wrangler.toml: KV id + D1 id + JAMI_PRODUCT_ID
+pnpm run db:migrate
 pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN
 pnpm exec wrangler secret put TELEGRAM_WEBHOOK_SECRET
 pnpm exec wrangler secret put JAMI_TOKEN
 pnpm run deploy
 # then, with the host from the deploy output:
 curl.exe -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" --data-urlencode "url=https://<HOST>/telegram/webhook" --data-urlencode "secret_token=<SECRET>"
+# create the endpoint https://<HOST>/webhooks/payments in the provider dashboard, then:
+pnpm exec wrangler secret put JAMI_WEBHOOK_SECRET
 curl.exe https://<HOST>/health
 ```
 
@@ -31,7 +35,9 @@ The steps below explain each command, its output, and how to check it worked.
 | Webhook secret     | You generate a random string                     | Secret `TELEGRAM_WEBHOOK_SECRET` (same value in `setWebhook`) |
 | Jami API token     | JamiDev dashboard → Developer → API Tokens       | Secret `JAMI_TOKEN`                                           |
 | Jami product ID    | JamiDev → create a **pay-what-you-want** product | Var `JAMI_PRODUCT_ID`                                         |
+| Payment webhook secret | Shown once when you create the endpoint (step 7b) | Secret `JAMI_WEBHOOK_SECRET`                              |
 | KV namespace       | Created in step 3                                | `wrangler.toml`                                               |
+| D1 database        | Created in step 3                                | `wrangler.toml`                                               |
 
 Also install Node.js 20+ and pnpm 9+.
 
@@ -60,7 +66,9 @@ export CLOUDFLARE_ACCOUNT_ID="<account-id>"
 
 For CI, skip `login` and export a `CLOUDFLARE_API_TOKEN` with the **Edit Cloudflare Workers** template instead.
 
-## 3. Create the KV namespace
+## 3. Create the storage (KV + D1)
+
+### KV namespace (sessions)
 
 ```sh
 pnpm exec wrangler kv namespace create SESSIONS
@@ -94,6 +102,40 @@ pnpm exec wrangler kv key list --binding SESSIONS --remote   # inspect stored ke
 
 You only need **one** namespace. The Worker stores one session key per Telegram user with a 24-hour TTL, plus a short-lived update-id dedupe key.
 
+### D1 database (users + donations)
+
+```sh
+pnpm exec wrangler d1 create donate-to-me
+```
+
+It prints the `database_id`. Add it to `wrangler.toml`:
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "donate-to-me"
+database_id = "<the database_id from the command>"
+```
+
+Then apply the schema:
+
+```sh
+pnpm run db:migrate          # remote database
+pnpm run db:migrate:local    # for `wrangler dev`
+```
+
+The migration in `migrations/0001_users_and_donations.sql` creates:
+
+- `users` — one row per person who interacts with the bot (`id`, names, first/last seen, interaction count).
+- `donations` — one row per checkout, linked to `users.id` by foreign key, with amount, gateway, status and order reference.
+
+Inspect it with:
+
+```sh
+pnpm exec wrangler d1 execute donate-to-me --remote --command "SELECT COUNT(*) FROM users"
+pnpm exec wrangler d1 execute donate-to-me --remote --command "SELECT * FROM donations ORDER BY created_at DESC LIMIT 10"
+```
+
 ## 4. Fill in `wrangler.toml`
 
 The file must look like this when you are done (keep your own IDs):
@@ -106,6 +148,11 @@ compatibility_date = "2026-10-06"
 [[kv_namespaces]]
 binding = "SESSIONS"
 id = "<the id from step 3>"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "donate-to-me"
+database_id = "<the database_id from step 3>"
 
 [vars]
 JAMI_PRODUCT_ID = "p_xxxxxxxx"          # your pay-what-you-want product
@@ -133,7 +180,9 @@ pnpm exec wrangler secret put TELEGRAM_WEBHOOK_SECRET
 pnpm exec wrangler secret put JAMI_TOKEN
 ```
 
-Generate a webhook secret (any random 1–256 characters from `A-Z a-z 0-9 _ -`; hex is safest):
+`JAMI_WEBHOOK_SECRET` is set in step 7b, after the payment endpoint exists.
+
+Generate the Telegram webhook secret (any random 1–256 characters from `A-Z a-z 0-9 _ -`; hex is safest):
 
 ```powershell
 # PowerShell
@@ -208,6 +257,29 @@ You want:
 
 You only need to repeat this step when the Worker hostname changes, or when you rotate the webhook secret.
 
+## 7b. Register the payment webhook
+
+In the payment provider dashboard, open **Automation → Webhooks** and add an endpoint:
+
+```
+https://<YOUR_WORKER_HOST>/webhooks/payments
+```
+
+Subscribe it to:
+
+- `order.completed` — a payment succeeded.
+- `checkout.session.expired` — a checkout ended without an order.
+
+Copy the endpoint secret (it is shown once) and store it:
+
+```sh
+pnpm exec wrangler secret put JAMI_WEBHOOK_SECRET
+```
+
+The route verifies the `X-JamiDev-Signature` header against the raw body, returns `400` for a bad signature, returns `503` when the secret is missing, and returns `200` for duplicates it has already processed. Deliveries are retried on non-2xx responses, so a temporary failure is safe.
+
+If you use a sandbox organization, create a separate endpoint there. Sandbox and production endpoints do not share events.
+
 ## 8. Verify the deployment
 
 Check the Worker's own view of Telegram:
@@ -225,8 +297,10 @@ A healthy response looks like:
   "missingConfig": [],
   "config": {
     "webhookSecretConfigured": true,
-    "jamiTokenConfigured": true,
-    "productConfigured": true
+    "paymentTokenConfigured": true,
+    "productConfigured": true,
+    "databaseConfigured": true,
+    "paymentWebhookSecretConfigured": true
   },
   "webhook": {
     "url": "https://<host>/telegram/webhook",
@@ -238,7 +312,7 @@ A healthy response looks like:
 }
 ```
 
-Then open the bot in Telegram and send `/start`. You should get the amount keyboard. Pick an amount, pick a gateway, then share the mobile number registered with that account (use the **Share my phone number** button or type `0912345678`) — Jami needs it to send the payment prompt. Follow the Jami checkout, then use `/status` after paying.
+Then open the bot in Telegram and send `/start`. You should get the amount keyboard. Pick an amount, pick a gateway, then share the mobile number registered with that account (use the **Share my phone number** button or type `0912345678`) — the payment provider needs it to send the payment request. Follow the checkout and pay: the bot should message you automatically when the webhook arrives, without sending `/status`. `/halloffame` (also works in groups) shows the top 3 donors once a payment completes.
 
 If `/health` is not `ok`:
 
@@ -265,7 +339,7 @@ Add `?drop=1` to the URL to discard a stale backlog of updates.
 pnpm exec wrangler tail
 ```
 
-Send a message to the bot while it is running. You will see update processing and any Telegram/Jami errors. `wrangler tail --status error` shows only failures.
+Send a message to the bot while it is running. You will see update processing and any Telegram or payment API errors. `wrangler tail --status error` shows only failures.
 
 In the Cloudflare dashboard, the Worker also has **Logs** and **Metrics** tabs.
 
@@ -278,6 +352,7 @@ TELEGRAM_BOT_TOKEN=123456:your-dev-bot-token
 TELEGRAM_WEBHOOK_SECRET=some-local-secret
 JAMI_TOKEN=jamidev_test_...
 JAMI_PRODUCT_ID=p_test_product
+JAMI_WEBHOOK_SECRET=some-local-webhook-secret
 ```
 
 `wrangler dev` only reads secrets from `.dev.vars` — dashboard secrets are not downloaded.
@@ -286,7 +361,7 @@ JAMI_PRODUCT_ID=p_test_product
 pnpm run dev
 ```
 
-This starts <http://127.0.0.1:8787> with a simulated local KV namespace; the placeholder KV id in `wrangler.toml` is fine locally.
+This starts <http://127.0.0.1:8787> with simulated local KV and D1 storage. Apply the schema once with `pnpm run db:migrate:local`; local data lives in `.wrangler/state`.
 
 Telegram cannot reach `localhost`. To exercise the real webhook flow you need either a tunnel (e.g. `cloudflared tunnel --url http://127.0.0.1:8787`) registered with `setWebhook`, or a deployed staging Worker. A tunnel URL changes when it restarts, so re-register the webhook each time.
 
@@ -327,12 +402,20 @@ pnpm exec wrangler delete
 
 # Delete the KV namespace (check the id with `kv namespace list`)
 pnpm exec wrangler kv namespace delete --namespace-id <kv-namespace-id>
+
+# Delete the D1 database (users + donations)
+pnpm exec wrangler d1 delete donate-to-me
 ```
 
 ## Troubleshooting checklist
 
 - `pnpm install` fails with `ETARGET` → old `@cloudflare/workers-types` pins. This repo uses `^5.x`; run `pnpm install` from the project root, not from inside `node_modules`.
 - `wrangler deploy` says the KV namespace id is invalid → step 3 was skipped or the id was pasted with quotes/whitespace.
+- `wrangler deploy` complains about the D1 binding → the `database_id` from `wrangler d1 create` is missing or wrong.
+- `/halloffame` says it could not load, or `/health` shows `databaseConfigured: false` → the `DB` binding is missing; apply the schema with `pnpm run db:migrate`.
+- Payment webhook returns `503` → `JAMI_WEBHOOK_SECRET` is not set (step 7b).
+- Payment webhook returns `400` → the signature was calculated over a body that differs from the raw request, or the endpoint secret is wrong.
+- A payment succeeds but the bot is not notified → check the provider's Webhooks page for the delivery response; the cron and `/status` still reconcile the donation.
 - Deploy succeeds but the bot replies "Payment setup incomplete" → `JAMI_PRODUCT_ID` is still `REPLACE_...` or `JAMI_TOKEN` is unset.
 - Bot does not answer at all → `curl /health`, check `wrangler tail`, and confirm the webhook URL is the current hostname.
 - Responses stop after a while → run `POST /telegram/repair` and check `/health`; the 15-minute cron will also self-heal a lost webhook. If the Worker is on the free plan, confirm you have not hit the daily request limit in the dashboard.

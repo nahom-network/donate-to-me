@@ -1,0 +1,654 @@
+import type {
+  Env,
+  InlineButton,
+  PendingCheckout,
+  Session,
+  TgCallback,
+  TgMessage,
+  TgUpdate,
+} from "./types";
+import {
+  DEFAULT_AMOUNTS,
+  GATEWAYS,
+  PENDING_TTL_SECONDS,
+  type Gateway,
+} from "./constants";
+import { answerCallback, sendMessage } from "./telegram";
+import { paymentClient, type CheckoutResult } from "./payment";
+import {
+  claimUpdate,
+  clearPending,
+  getPending,
+  pendingKey,
+  sessionKey,
+} from "./session";
+import {
+  getHallOfFame,
+  markDonationCompleted,
+  markDonationExpired,
+  recordUser,
+  upsertDonation,
+} from "./db";
+import {
+  errorMessage,
+  escapeHtml,
+  formatEtb,
+  gatewayLabel,
+} from "./util";
+
+export async function handleUpdate(
+  update: TgUpdate,
+  env: Env,
+): Promise<void> {
+  try {
+    if (
+      update.update_id !== undefined &&
+      !(await claimUpdate(env, update.update_id))
+    ) {
+      return;
+    }
+    if (update.callback_query) {
+      await recordUser(env, update.callback_query.from);
+      await onCallback(update.callback_query, env);
+    } else if (update.message) {
+      await recordUser(env, update.message.from);
+      await onMessage(update.message, env);
+    }
+  } catch (error) {
+    console.error(
+      "Update processing failed",
+      JSON.stringify({
+        updateId: update.update_id,
+        error: errorMessage(error),
+      }),
+    );
+    const chatId =
+      update.callback_query?.message?.chat.id ?? update.message?.chat.id;
+    if (!chatId) return;
+    // Never let a failed notification escape: that would make the Worker
+    // return 500 and trigger another Telegram retry for the same update.
+    try {
+      await sendMessage(
+        env,
+        chatId,
+        "I couldn’t finish that request. Please send /donate and try again.",
+      );
+    } catch (notifyError) {
+      console.error("Could not notify user", errorMessage(notifyError));
+    }
+  }
+}
+
+async function onMessage(message: TgMessage, env: Env) {
+  const chatId = message.chat.id;
+  const userId = message.from?.id;
+  const messageText = message.text?.trim() ?? "";
+  const name = message.from?.first_name
+    ? `, ${escapeHtml(message.from.first_name)}`
+    : "";
+  const command = /^\/([a-z]+)(?:@\w+)?(?:\s|$)/i
+    .exec(messageText)?.[1]
+    ?.toLowerCase();
+
+  // Phone sharing and reply keyboards only work in a direct chat. The public
+  // hall of fame is the one command that also works in groups.
+  if (message.chat.type && message.chat.type !== "private") {
+    if (isHallOfFameCommand(command)) return showHallOfFame(chatId, env);
+    return sendMessage(
+      env,
+      chatId,
+      "I can only take donations in a private chat. Open a direct chat with me and send /donate.",
+    );
+  }
+
+  if (message.contact) return handleContact(message, env);
+
+  if (command === "cancel" || messageText.toLowerCase() === "cancel") {
+    return cancelDonation(env, chatId, userId);
+  }
+
+  if (isHallOfFameCommand(command)) return showHallOfFame(chatId, env);
+
+  if (command === "start" || command === "donate") {
+    if (userId) await clearPending(env, userId);
+    return sendMessage(
+      env,
+      chatId,
+      `Selam${name}! You can support me with a secure checkout. Choose a donation amount in ETB:`,
+      amountKeyboard(env),
+    );
+  }
+  if (command === "status") {
+    return showStatus(chatId, userId, env);
+  }
+  if (command === "help") {
+    return sendMessage(
+      env,
+      chatId,
+      "Use /donate to pick an amount and payment method. Next, share the mobile number registered with your Telebirr, M-Pesa, or CBE Birr account so the payment request can be sent. Use /status to check the result, /halloffame to see the top donors, or /cancel to stop.",
+    );
+  }
+
+  // While a checkout is waiting for a phone number, a plain message is the
+  // number (or a typo).
+  if (userId) {
+    const pending = await getPending(env, userId);
+    if (pending) {
+      const phone = normalizeEthiopianPhone(messageText, pending.gateway);
+      if (phone) return completeCheckout(env, chatId, userId, pending, phone);
+      return sendMessage(
+        env,
+        chatId,
+        `That doesn’t look like ${phoneHint(pending.gateway)}. Send it like <code>${phoneExample(pending.gateway)}</code>, or tap the <b>Share my phone number</b> button.`,
+        phoneKeyboard(pending.gateway),
+      );
+    }
+  }
+
+  return sendMessage(
+    env,
+    chatId,
+    "Send /donate to support me, or /status to check your latest checkout.",
+  );
+}
+
+function amountKeyboard(env: Env) {
+  let amounts = (env.DONATION_AMOUNTS || DEFAULT_AMOUNTS)
+    .split(",")
+    .map((x) => Number(x.trim()))
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 100000);
+  if (amounts.length === 0) amounts = DEFAULT_AMOUNTS.split(",").map(Number);
+
+  const rows: InlineButton[][] = [];
+  for (let i = 0; i < amounts.length; i += 2) {
+    rows.push(
+      amounts.slice(i, i + 2).map((amount) => ({
+        text: `${amount} ETB`,
+        callback_data: `amount:${amount}`,
+        style: "primary",
+      })),
+    );
+  }
+  rows.push([{ text: "Cancel", callback_data: "cancel", style: "danger" }]);
+  return { inline_keyboard: rows };
+}
+
+async function onCallback(query: TgCallback, env: Env) {
+  const chatId = query.message?.chat.id;
+  // Answering an old button can fail ("query is too old"); that must not stop
+  // the rest of the checkout flow.
+  await answerCallback(env, query.id);
+  if (!chatId || !query.data) return;
+
+  // Inline keyboards exist in groups, but the phone step needs a private chat.
+  const chatType = query.message?.chat.type;
+  if (chatType && chatType !== "private") {
+    return sendMessage(
+      env,
+      chatId,
+      "I can only take donations in a private chat. Open a direct chat with me and send /donate.",
+    );
+  }
+
+  const userId = query.from.id;
+
+  if (query.data === "cancel") {
+    await clearPending(env, userId);
+    return sendMessage(
+      env,
+      chatId,
+      "Cancelled. Send /donate whenever you want to donate.",
+      removeKeyboard(),
+    );
+  }
+
+  if (query.data === "back") {
+    return sendMessage(
+      env,
+      chatId,
+      "Choose a donation amount in ETB:",
+      amountKeyboard(env),
+    );
+  }
+
+  if (query.data === "status") {
+    return showStatus(chatId, userId, env);
+  }
+
+  const amountMatch = /^amount:(\d{1,6})$/.exec(query.data);
+  if (amountMatch) {
+    const amount = Number(amountMatch[1]);
+    if (amount < 1 || amount > 100000) {
+      return sendMessage(env, chatId, "That amount isn’t available.");
+    }
+    const rows: InlineButton[][] = GATEWAYS.map((gateway) => [
+      {
+        text: gatewayLabel(gateway),
+        callback_data: `gateway:${amount}:${gateway}`,
+        style: gateway === "telebirr" ? "success" : "primary",
+      },
+    ]);
+    rows.push([
+      { text: "← Back", callback_data: "back", style: "primary" },
+      { text: "Cancel", callback_data: "cancel", style: "danger" },
+    ]);
+    return sendMessage(
+      env,
+      chatId,
+      `You chose <b>${formatEtb(amount)}</b>. Select how you’d like to pay:`,
+      { inline_keyboard: rows },
+    );
+  }
+
+  const checkoutMatch = /^gateway:(\d{1,6}):(telebirr|mpesa|cbe)$/.exec(
+    query.data,
+  );
+  if (!checkoutMatch) {
+    return sendMessage(
+      env,
+      chatId,
+      "That button is out of date. Send /donate to start a fresh checkout.",
+    );
+  }
+
+  const amount = Number(checkoutMatch[1]);
+  const gateway = checkoutMatch[2] as Gateway;
+  if (amount < 1 || amount > 100000) {
+    return sendMessage(env, chatId, "That amount isn’t available.");
+  }
+
+  // The payment API needs the payer's phone number to send the payment
+  // request. Remember the choice briefly and ask for it; the number itself is
+  // never persisted.
+  const pending: PendingCheckout = {
+    amount,
+    gateway,
+    createdAt: Date.now(),
+  };
+  await env.SESSIONS.put(pendingKey(userId), JSON.stringify(pending), {
+    expirationTtl: PENDING_TTL_SECONDS,
+  });
+
+  try {
+    return await sendMessage(
+      env,
+      chatId,
+      `You chose <b>${gatewayLabel(gateway)}</b> for <b>${formatEtb(amount)}</b>.\n\n` +
+        `Send ${phoneHint(gateway)} so the payment request can be sent. Tap the button below or type it, e.g. <code>${phoneExample(gateway)}</code>.\n\n` +
+        `<i>Your number is used only to start this payment and isn’t stored by this bot.</i>`,
+      phoneKeyboard(gateway),
+    );
+  } catch (error) {
+    // If the prompt never reached the user, don't leave a pending state that
+    // would swallow their next message.
+    await clearPending(env, userId);
+    throw error;
+  }
+}
+
+async function handleContact(message: TgMessage, env: Env) {
+  const chatId = message.chat.id;
+  const userId = message.from?.id;
+  const contact = message.contact!;
+  if (!userId) {
+    return sendMessage(
+      env,
+      chatId,
+      "I couldn’t identify this Telegram account. Send /donate to start again.",
+    );
+  }
+  if (contact.user_id !== undefined && contact.user_id !== userId) {
+    return sendMessage(
+      env,
+      chatId,
+      "Please share your own phone number, not someone else’s.",
+      phoneKeyboard(),
+    );
+  }
+
+  const pending = await getPending(env, userId);
+  if (!pending) {
+    return sendMessage(
+      env,
+      chatId,
+      "Thanks! There’s no donation in progress right now. Send /donate to start one.",
+      removeKeyboard(),
+    );
+  }
+
+  const phone = normalizeEthiopianPhone(contact.phone_number, pending.gateway);
+  if (!phone) {
+    return sendMessage(
+      env,
+      chatId,
+      `That number doesn’t match ${phoneHint(pending.gateway)}. Type it instead, e.g. <code>${phoneExample(pending.gateway)}</code>.`,
+      phoneKeyboard(pending.gateway),
+    );
+  }
+
+  return completeCheckout(env, chatId, userId, pending, phone);
+}
+
+async function completeCheckout(
+  env: Env,
+  chatId: number,
+  userId: number,
+  pending: PendingCheckout,
+  phone: string,
+) {
+  if (Date.now() - pending.createdAt > PENDING_TTL_SECONDS * 1000) {
+    await clearPending(env, userId);
+    return sendMessage(
+      env,
+      chatId,
+      "That donation session expired. Send /donate to start again.",
+      removeKeyboard(),
+    );
+  }
+
+  await clearPending(env, userId);
+  // Don't let a failed status message block the actual checkout.
+  void sendMessage(
+    env,
+    chatId,
+    "Creating your secure checkout…",
+    removeKeyboard(),
+  ).catch((error) =>
+    console.warn("Could not send progress message", errorMessage(error)),
+  );
+
+  const payment = paymentClient(env);
+  let checkout: CheckoutResult;
+  try {
+    checkout = await payment.createCheckout({
+      productId: env.JAMI_PRODUCT_ID,
+      amount: pending.amount * 100,
+      // The payment API requires an email on the customer record. Telegram
+      // users don't have one here, so use a stable per-user placeholder
+      // (example.com is reserved). The phone is the real payment number.
+      customer: {
+        email: `tg${userId}@example.com`,
+        phone,
+        externalId: String(userId),
+      },
+      gateway: pending.gateway,
+    });
+  } catch (error) {
+    console.error(
+      "Checkout creation failed",
+      JSON.stringify({
+        userId,
+        gateway: pending.gateway,
+        error: errorMessage(error),
+      }),
+    );
+    return sendMessage(
+      env,
+      chatId,
+      "We couldn’t start that checkout. Check the number and try again, or send /donate to restart.",
+      removeKeyboard(),
+    );
+  }
+
+  if ("orderId" in checkout) {
+    await upsertDonation(env, {
+      userId,
+      sessionId: checkout.sessionId,
+      amountMinor: pending.amount * 100,
+      gateway: pending.gateway,
+      status: "completed",
+      orderId: checkout.orderId,
+      completedAt: Date.now(),
+    });
+    return sendMessage(
+      env,
+      chatId,
+      `Thank you! Your ${formatEtb(pending.amount)} donation was completed. Reference: ${checkout.orderId}`,
+      removeKeyboard(),
+    );
+  }
+
+  await env.SESSIONS.put(
+    sessionKey(userId),
+    JSON.stringify({
+      sessionId: checkout.sessionId,
+      amountMinor: pending.amount * 100,
+      createdAt: Date.now(),
+    } satisfies Session),
+    { expirationTtl: 86400 },
+  );
+
+  await upsertDonation(env, {
+    userId,
+    sessionId: checkout.sessionId,
+    amountMinor: pending.amount * 100,
+    gateway: pending.gateway,
+    status: "pending",
+  });
+
+  if (checkout.mode === "redirect" && checkout.checkoutUrl) {
+    return sendMessage(
+      env,
+      chatId,
+      `Your ${formatEtb(pending.amount)} donation checkout is ready.\n\nPay with <b>${gatewayLabel(pending.gateway)}</b> on the secure payment page, then check the result here.`,
+      {
+        inline_keyboard: [
+          [
+            {
+              text: "Open secure checkout",
+              url: checkout.checkoutUrl,
+              style: "success",
+            },
+          ],
+          [
+            {
+              text: "I’ve paid — check status",
+              callback_data: "status",
+              style: "primary",
+            },
+          ],
+        ] satisfies InlineButton[][],
+      },
+    );
+  }
+
+  return sendMessage(
+    env,
+    chatId,
+    `Approve the ${formatEtb(pending.amount)} request on your phone, then check the result here.`,
+    {
+      inline_keyboard: [
+        [
+          {
+            text: "I’ve paid — check status",
+            callback_data: "status",
+            style: "primary",
+          },
+        ],
+      ] satisfies InlineButton[][],
+    },
+  );
+}
+
+async function cancelDonation(
+  env: Env,
+  chatId: number,
+  userId: number | undefined,
+) {
+  if (userId) await clearPending(env, userId);
+  return sendMessage(
+    env,
+    chatId,
+    "Cancelled. Send /donate whenever you want to donate.",
+    removeKeyboard(),
+  );
+}
+
+function normalizeEthiopianPhone(
+  input: string,
+  gateway: Gateway,
+): string | null {
+  let digits = input.replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("251")) digits = digits.slice(3);
+  else if (digits.startsWith("0")) digits = digits.slice(1);
+
+  // M-Pesa uses Safaricom numbers (07…), Telebirr and CBE Birr use Ethio
+  // Telecom numbers (09…). The normalized form is what the payment API wants.
+  const prefix = gateway === "mpesa" ? "7" : "9";
+  if (!/^\d{9}$/.test(digits) || !digits.startsWith(prefix)) return null;
+  return `251${digits}`;
+}
+
+function phoneHint(gateway: Gateway) {
+  return gateway === "mpesa"
+    ? "an M-Pesa number starting with <code>07</code> or <code>+2517</code>"
+    : `a ${gatewayLabel(gateway)} number starting with <code>09</code> or <code>+2519</code>`;
+}
+
+function phoneExample(gateway: Gateway) {
+  return gateway === "mpesa" ? "0712345678" : "0912345678";
+}
+
+function phoneKeyboard(gateway: Gateway = "telebirr") {
+  return {
+    keyboard: [
+      [
+        {
+          text: "📱 Share my phone number",
+          request_contact: true,
+          style: "success",
+        },
+      ],
+      [{ text: "Cancel", style: "danger" }],
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: true,
+    input_field_placeholder:
+      gateway === "mpesa" ? "07xx xxx xxx" : "09xx xxx xxx",
+  };
+}
+
+function removeKeyboard() {
+  return { remove_keyboard: true };
+}
+
+async function showStatus(
+  chatId: number,
+  userId: number | undefined,
+  env: Env,
+) {
+  if (!userId) {
+    return sendMessage(
+      env,
+      chatId,
+      "I couldn’t identify this Telegram account. Start a new checkout with /donate.",
+    );
+  }
+  const raw = await env.SESSIONS.get(sessionKey(userId));
+  if (!raw) {
+    return sendMessage(
+      env,
+      chatId,
+      "You don’t have a recent checkout to check. Send /donate to start one.",
+    );
+  }
+
+  let session: Session;
+  try {
+    session = JSON.parse(raw) as Session;
+  } catch {
+    return sendMessage(
+      env,
+      chatId,
+      "I couldn’t read your last checkout. Send /donate to start a new one.",
+    );
+  }
+  if (Date.now() - session.createdAt > 86400000) {
+    return sendMessage(
+      env,
+      chatId,
+      "That checkout has expired. Send /donate to start a new one.",
+    );
+  }
+
+  const payment = paymentClient(env);
+  const status = await payment.getCheckoutStatus(session.sessionId);
+  if (status.status === "completed") {
+    try {
+      await markDonationCompleted(env, session.sessionId, status.orderId);
+    } catch (error) {
+      console.error("Could not record completed donation", errorMessage(error));
+    }
+    await sendMessage(
+      env,
+      chatId,
+      `Payment received — thank you for donating ${formatEtb(session.amountMinor / 100)}!`,
+    );
+  } else if (status.status === "expired") {
+    try {
+      await markDonationExpired(env, session.sessionId);
+    } catch (error) {
+      console.error("Could not record expired donation", errorMessage(error));
+    }
+    const reason = status.failure?.message
+      ? ` (${escapeHtml(status.failure.message)})`
+      : "";
+    await sendMessage(
+      env,
+      chatId,
+      `That checkout expired${reason}. Send /donate to create a new one.`,
+    );
+  } else {
+    await sendMessage(
+      env,
+      chatId,
+      `Your ${formatEtb(session.amountMinor / 100)} checkout is still ${status.status}. Finish payment, then check again with /status.`,
+    );
+  }
+}
+
+function isHallOfFameCommand(command: string | undefined) {
+  return (
+    command === "halloffame" || command === "top" || command === "topdonors"
+  );
+}
+
+async function showHallOfFame(chatId: number, env: Env) {
+  const header = "🏆 <b>HALL OF FAME</b>\n<i>Top supporters · all-time total</i>";
+
+  try {
+    const rows = await getHallOfFame(env, 3);
+
+    if (rows.length === 0) {
+      return sendMessage(
+        env,
+        chatId,
+        `${header}\n\nNo completed donations yet.\nSend /donate and take the top spot!`,
+      );
+    }
+
+    const medals = ["🥇", "🥈", "🥉"];
+    const lines = rows.map((row, index) => {
+      const name = row.firstName || "Anonymous";
+      const donations = `donation${row.donationCount === 1 ? "" : "s"}`;
+      return (
+        `${medals[index]} <b>${escapeHtml(name)}</b>\n` +
+        `     ${formatEtb(row.totalMinor / 100)} · ${row.donationCount} ${donations}`
+      );
+    });
+
+    return sendMessage(
+      env,
+      chatId,
+      `${header}\n━━━━━━━━━━━━━━\n${lines.join("\n\n")}\n━━━━━━━━━━━━━━`,
+    );
+  } catch (error) {
+    console.error("Could not load hall of fame", errorMessage(error));
+    return sendMessage(
+      env,
+      chatId,
+      "I couldn’t load the hall of fame right now. Try again in a moment.",
+    );
+  }
+}
