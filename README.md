@@ -1,4 +1,6 @@
-# Donate to mes
+# Donate to me
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/nahom-network/donate-to-me)
 
 A small Telegram bot that lets people choose a donation amount, select Telebirr, M-Pesa, or CBE Birr, and pay through a secure hosted checkout. It runs on Cloudflare Workers. It does not use OCR or collect transaction IDs.
 
@@ -13,6 +15,7 @@ A small Telegram bot that lets people choose a donation amount, select Telebirr,
    - Telebirr and CBE Birr: an Ethio Telecom number starting with `09` or `+2519` (e.g. `0912345678`).
 
    The payment provider requires the number to send the payment request. The bot forwards it for that checkout and does not store it.
+
 4. Open the secure checkout (or approve the prompt on the phone). A signed webhook notifies the bot as soon as the payment completes, so it messages you automatically; you can also tap **I’ve paid — check status** or send `/status`.
 5. `/halloffame` shows the top three people by total completed donations, aggregated across all their donations (first names only, no usernames).
 
@@ -38,11 +41,11 @@ Button colors use the `style` field added in Bot API 9.4 (blue = primary, green 
 
    ```sh
    pnpm exec wrangler secret put JAMI_TOKEN
+   pnpm exec wrangler secret put JAMI_WEBHOOK_SECRET
    pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN
-   pnpm exec wrangler secret put TELEGRAM_WEBHOOK_SECRET
    ```
 
-   The API token should be a test token while testing. Use a long random string for `TELEGRAM_WEBHOOK_SECRET`.
+   The API token should be a test token while testing. Use a long random string for `JAMI_WEBHOOK_SECRET`.
 
 7. Replace `JAMI_PRODUCT_ID` in `wrangler.toml` with the pay-what-you-want product ID. Adjust `DONATION_AMOUNTS` if desired. Amounts are ETB.
 8. Run locally with `pnpm run dev` or deploy with `pnpm run deploy`.
@@ -111,17 +114,17 @@ The response reports how many sessions were checked, completed, expired, or skip
 
 ## Project structure
 
-| File | Purpose |
-| --- | --- |
-| `src/index.ts` | Worker entry: routes, Telegram webhook, cron |
-| `src/bot.ts` | Telegram updates, donation flow, `/halloffame` |
-| `src/webhooks.ts` | Signed payment webhook handler |
-| `src/db.ts` | D1 users, donations, reconciliation, leaderboard query |
-| `src/session.ts` | KV sessions, pending choices, update dedupe |
-| `src/payment.ts` | Payment API client with timeouts |
-| `src/telegram.ts` | Telegram API client with retries |
-| `src/health.ts` | `/health`, webhook watchdog, bot profile |
-| `src/constants.ts`, `src/types.ts`, `src/util.ts` | Shared constants, types, helpers |
+| File                                              | Purpose                                                |
+| ------------------------------------------------- | ------------------------------------------------------ |
+| `src/index.ts`                                    | Worker entry: routes, Telegram webhook, cron           |
+| `src/bot.ts`                                      | Telegram updates, donation flow, `/halloffame`         |
+| `src/webhooks.ts`                                 | Signed payment webhook handler                         |
+| `src/db.ts`                                       | D1 users, donations, reconciliation, leaderboard query |
+| `src/session.ts`                                  | KV sessions, pending choices, update dedupe            |
+| `src/payment.ts`                                  | Payment API client with timeouts                       |
+| `src/telegram.ts`                                 | Telegram API client with retries                       |
+| `src/health.ts`                                   | `/health`, webhook watchdog, bot profile               |
+| `src/constants.ts`, `src/types.ts`, `src/util.ts` | Shared constants, types, helpers                       |
 
 ## When the bot stops responding
 

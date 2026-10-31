@@ -10,6 +10,37 @@
     "db:migrate": "wrangler d1 migrations apply donate-to-me --remote",
     "db:migrate:local": "wrangler d1 migrations apply donate-to-me --local"
   },
+  "cloudflare": {
+    "bindings": {
+      "SESSIONS": {
+        "description": "KV namespace for Telegram sessions. Created automatically."
+      },
+      "DB": {
+        "description": "D1 database for the donation application. Created automatically."
+      },
+      "JAMI_PRODUCT_ID": {
+        "description": "Enter your own Jami product ID."
+      },
+      "DONATION_AMOUNTS": {
+        "description": "Comma-separated donation amounts in ETB."
+      },
+      "TELEGRAM_BOT_TOKEN": {
+        "description": "Your Telegram bot token from @BotFather. Keep this secret."
+      },
+      "TELEGRAM_WEBHOOK_SECRET": {
+        "description": "Your Telegram webhook secret token. Keep this secret."
+      },
+      "JAMI_TOKEN": {
+        "description": "Your Jami API token. Keep this secret."
+      },
+      "JAMI_WEBHOOK_SECRET": {
+        "description": "Your Jami webhook secret token. Keep this secret."
+      },
+      "ADMIN_SECRET": {
+        "description": "Your admin secret token. Keep this secret."
+      }
+    }
+  },
   "dependencies": {
     "jami-sdk": "^0.4.0"
   },

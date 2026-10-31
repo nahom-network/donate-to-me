@@ -1,33 +1,28 @@
+
 name = "donate-to-me"
 main = "src/index.ts"
 compatibility_date = "2026-10-06"
 
+# Automatically provisioned for each user
 [[kv_namespaces]]
 binding = "SESSIONS"
-id = "fc930c8001184e33a1c639bb7203971c"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "donate-to-me"
-database_id = "e05cc09a-c942-4703-a7fb-0340dc44e399"
 
-# Served at /sticker.webp so Telegram can fetch it for the /start photo.
 [assets]
 directory = "./src/assets"
 
+# Users can customize these during deployment
 [vars]
-JAMI_PRODUCT_ID = "p_JNNaCND81yLE"
-# Optional comma-separated donation amounts in ETB.
+JAMI_PRODUCT_ID = ""
 DONATION_AMOUNTS = "1,5,10,50,100,250,500"
-# Optional but recommended: the public URL of this Worker's webhook. The bot
-# reports it at /health and re-registers it automatically if Telegram loses it.
-WEBHOOK_URL = "https://donate-to-me.nahom-network.workers.dev/telegram/webhook"
+WEBHOOK_URL = ""
 
-# Watchdog: checks the Telegram webhook every 15 minutes and repairs it.
 [triggers]
 crons = ["*/15 * * * *"]
 
-# ...
 [observability.logs]
 enabled = true
 head_sampling_rate = 1
