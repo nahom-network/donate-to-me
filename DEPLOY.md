@@ -157,6 +157,7 @@ database_id = "<the database_id from step 3>"
 [vars]
 JAMI_PRODUCT_ID = "p_xxxxxxxx"          # your pay-what-you-want product
 DONATION_AMOUNTS = "50,100,250,500"     # optional, ETB
+START_IMAGE_URL = ""                    # optional, public image URL for /start
 # Optional but recommended. The public URL used by the 15-minute watchdog.
 # WEBHOOK_URL = "https://donate-to-me.<your-subdomain>.workers.dev/telegram/webhook"
 
@@ -167,6 +168,7 @@ crons = ["*/15 * * * *"]
 Notes:
 
 - `DONATION_AMOUNTS` is a comma-separated list of whole ETB amounts. Invalid entries are ignored; if none survive, the defaults `50,100,250,500` are used.
+- `START_IMAGE_URL` is an optional public image URL used as the `/start` photo. Leave it empty to use the bundled `src/assets/sticker.webp`; Telegram fetches the URL server-side.
 - `WEBHOOK_URL` must be the exact URL you register in step 7 and must end in `/telegram/webhook`. Setting it lets the watchdog restore a webhook that was deleted before the Worker ever saw an update. If omitted, the Worker learns its URL from the first update it receives.
 - The cron trigger is part of the file, so it is created by the first deploy. No dashboard action is needed.
 

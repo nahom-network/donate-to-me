@@ -25,10 +25,9 @@ Verification order: `typecheck` → `deploy --dry-run` → `deploy`. Run the mat
 - **The D1 binding must be named `DB`.** The code reads `env.DB`. A dashboard edit once changed it to `donate_to_me`; the Worker deployed fine, `/health` showed `databaseConfigured: false`, and every donation was silently lost. Do not rename it.
 - Deploy with Wrangler from this directory, not the dashboard Quick Edit — dashboard deploys have dropped the D1 binding.
 - Local D1 storage is keyed by `database_id`. If the database is recreated or the ID changes, rerun `pnpm run db:migrate:local` or the local tables disappear.
-- Secrets (set with `pnpm exec wrangler secret put NAME`, value from stdin): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `JAMI_TOKEN`, `JAMI_WEBHOOK_SECRET`, optional `ADMIN_SECRET`. `JAMI_PRODUCT_ID`, `DONATION_AMOUNTS`, `WEBHOOK_URL` are `[vars]` in `wrangler.toml`.
-- `wrangler.toml` contains the real KV/D1/product IDs and is committed. There is no git remote. Never commit `.dev.vars`.
+- Secrets (set with `pnpm exec wrangler secret put NAME`, value from stdin): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `JAMI_TOKEN`, `JAMI_WEBHOOK_SECRET`, optional `ADMIN_SECRET`. `JAMI_PRODUCT_ID`, `DONATION_AMOUNTS`, `WEBHOOK_URL`, `START_IMAGE_URL` are `[vars]` in `wrangler.toml`.
+- `wrangler.toml` is a deploy-button template: KV/D1 are provisioned by the deploy form (no ids in the file) and vars are blank. Don't hardcode local IDs or secrets; `.dev.vars` is gitignored. The repo is public at `github.com/nahom-network/donate-to-me`.
 - Local dev secrets live in `.dev.vars` (gitignored); dashboard secrets are not downloaded.
-- `[observability.issue_detection]` in `wrangler.toml` is unknown to wrangler 4.156.0 (warning only).
 - D1 data inspection: `pnpm exec wrangler d1 execute donate-to-me --remote --command "..."`. Prefer `--json` and filter.
 
 ## Architecture

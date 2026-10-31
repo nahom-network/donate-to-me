@@ -19,6 +19,8 @@ directory = "./src/assets"
 JAMI_PRODUCT_ID = ""
 DONATION_AMOUNTS = "1,5,10,50,100,250,500"
 WEBHOOK_URL = ""
+# Optional: public image URL for /start. Empty uses the bundled sticker.
+START_IMAGE_URL = ""
 
 [triggers]
 crons = ["*/15 * * * *"]

@@ -24,6 +24,9 @@
       "DONATION_AMOUNTS": {
         "description": "Comma-separated donation amounts in ETB."
       },
+      "START_IMAGE_URL": {
+        "description": "Optional public image URL for the /start message. Leave empty to use the bundled sticker."
+      },
       "TELEGRAM_BOT_TOKEN": {
         "description": "Your Telegram bot token from @BotFather. Keep this secret."
       },

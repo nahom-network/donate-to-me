@@ -10,6 +10,8 @@ export interface Env {
   DONATION_AMOUNTS?: string;
   /** Optional public URL of the Telegram webhook, used by the watchdog. */
   WEBHOOK_URL?: string;
+  /** Optional public image URL for /start; defaults to the bundled sticker. */
+  START_IMAGE_URL?: string;
   /** Protects the manual /admin/reconcile endpoint. */
   ADMIN_SECRET?: string;
   SESSIONS: KVNamespace;

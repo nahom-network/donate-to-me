@@ -41,7 +41,11 @@ import {
 } from "./db";
 import { errorMessage, escapeHtml, formatEtb, gatewayLabel } from "./util";
 
-export async function handleUpdate(update: TgUpdate, env: Env): Promise<void> {
+export async function handleUpdate(
+  update: TgUpdate,
+  env: Env,
+  origin?: string,
+): Promise<void> {
   try {
     if (
       update.update_id !== undefined &&
@@ -54,7 +58,7 @@ export async function handleUpdate(update: TgUpdate, env: Env): Promise<void> {
       await onCallback(update.callback_query, env);
     } else if (update.message) {
       await recordUser(env, update.message.from);
-      await onMessage(update.message, env);
+      await onMessage(update.message, env, origin);
     }
   } catch (error) {
     console.error(
@@ -81,7 +85,7 @@ export async function handleUpdate(update: TgUpdate, env: Env): Promise<void> {
   }
 }
 
-async function onMessage(message: TgMessage, env: Env) {
+async function onMessage(message: TgMessage, env: Env, origin?: string) {
   const chatId = message.chat.id;
   const userId = message.from?.id;
   const messageText = message.text?.trim() ?? "";
@@ -121,7 +125,7 @@ async function onMessage(message: TgMessage, env: Env) {
       return await sendPhoto(
         env,
         chatId,
-        `${publicOrigin(env)}/sticker.webp`,
+        startImageUrl(env, origin),
         caption,
         startKeyboard(),
       );
@@ -227,6 +231,12 @@ function publicOrigin(env: Env): string {
     }
   }
   return "https://donate-to-me.nahom-network.workers.dev";
+}
+
+/** Optional START_IMAGE_URL override; falls back to the bundled sticker. */
+function startImageUrl(env: Env, origin?: string): string {
+  const configured = env.START_IMAGE_URL?.trim();
+  return configured || `${origin ?? publicOrigin(env)}/sticker.webp`;
 }
 
 async function onCallback(query: TgCallback, env: Env) {

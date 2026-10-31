@@ -72,7 +72,7 @@ export default {
     // Telegram's timeout, the same update would be retried over and over and
     // the bot would look dead.
     ctx.waitUntil(rememberWebhookUrl(env, url));
-    ctx.waitUntil(handleUpdate(update, env));
+    ctx.waitUntil(handleUpdate(update, env, url.origin));
 
     return text("ok");
   },
