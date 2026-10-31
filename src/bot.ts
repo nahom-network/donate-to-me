@@ -13,7 +13,14 @@ import {
   PENDING_TTL_SECONDS,
   type Gateway,
 } from "./constants";
-import { answerCallback, sendMessage } from "./telegram";
+import {
+  answerCallback,
+  deleteMessage,
+  editMessageText,
+  sendChatAction,
+  sendMessage,
+  sendMessageGetId,
+} from "./telegram";
 import { paymentClient, type CheckoutResult } from "./payment";
 import {
   claimUpdate,
@@ -103,7 +110,13 @@ async function onMessage(message: TgMessage, env: Env) {
   if (isHallOfFameCommand(command)) return showHallOfFame(chatId, env);
 
   if (command === "start" || command === "donate") {
-    if (userId) await clearPending(env, userId);
+    if (userId) {
+      const pending = await getPending(env, userId);
+      if (pending?.promptMessageId) {
+        await deleteMessage(env, chatId, pending.promptMessageId);
+      }
+      await clearPending(env, userId);
+    }
     return sendMessage(
       env,
       chatId,
@@ -118,7 +131,7 @@ async function onMessage(message: TgMessage, env: Env) {
     return sendMessage(
       env,
       chatId,
-      "Use /donate to pick an amount and payment method. Next, share the mobile number registered with your Telebirr, M-Pesa, or CBE Birr account so the payment request can be sent. Use /status to check the result, /halloffame to see the top donors, or /cancel to stop.",
+      "Use /donate to pick an amount and payment method. Next, reply to the prompt with the mobile number registered with your Telebirr, M-Pesa, or CBE Birr account so the payment request can be sent. Use /status to check the result, /halloffame to see the top donors, or /cancel to stop.",
     );
   }
 
@@ -128,12 +141,18 @@ async function onMessage(message: TgMessage, env: Env) {
     const pending = await getPending(env, userId);
     if (pending) {
       const phone = normalizeEthiopianPhone(messageText, pending.gateway);
+      // The phone message has served its purpose; remove it (this also keeps
+      // the number out of the chat history).
+      if (message.message_id) {
+        await deleteMessage(env, chatId, message.message_id);
+      }
       if (phone) return completeCheckout(env, chatId, userId, pending, phone);
-      return sendMessage(
+      return promptForPhone(
         env,
         chatId,
-        `That doesn’t look like ${phoneHint(pending.gateway)}. Send it like <code>${phoneExample(pending.gateway)}</code>, or tap the <b>Share my phone number</b> button.`,
-        phoneKeyboard(pending.gateway),
+        userId,
+        pending,
+        `That doesn’t look like ${phoneHint(pending.gateway)}. Reply with ${phoneHint(pending.gateway)}, e.g. <code>${phoneExample(pending.gateway)}</code>.`,
       );
     }
   }
@@ -168,6 +187,7 @@ function amountKeyboard(env: Env) {
 
 async function onCallback(query: TgCallback, env: Env) {
   const chatId = query.message?.chat.id;
+  const messageId = query.message?.message_id;
   // Answering an old button can fail ("query is too old"); that must not stop
   // the rest of the checkout flow.
   await answerCallback(env, query.id);
@@ -186,16 +206,19 @@ async function onCallback(query: TgCallback, env: Env) {
   const userId = query.from.id;
 
   if (query.data === "cancel") {
-    await clearPending(env, userId);
-    return sendMessage(
-      env,
-      chatId,
-      "Cancelled. Send /donate whenever you want to donate.",
-      removeKeyboard(),
-    );
+    return cancelDonation(env, chatId, userId, messageId);
   }
 
   if (query.data === "back") {
+    if (messageId) {
+      return editMessageText(
+        env,
+        chatId,
+        messageId,
+        "Choose a donation amount in ETB:",
+        amountKeyboard(env),
+      );
+    }
     return sendMessage(
       env,
       chatId,
@@ -225,12 +248,14 @@ async function onCallback(query: TgCallback, env: Env) {
       { text: "← Back", callback_data: "back", style: "primary" },
       { text: "Cancel", callback_data: "cancel", style: "danger" },
     ]);
-    return sendMessage(
-      env,
-      chatId,
-      `You chose <b>${formatEtb(amount)}</b>. Select how you’d like to pay:`,
-      { inline_keyboard: rows },
-    );
+    const text = `You chose <b>${formatEtb(amount)}</b>. Select how you’d like to pay:`;
+    // Replace the amount message instead of leaving it in the chat.
+    if (messageId) {
+      return editMessageText(env, chatId, messageId, text, {
+        inline_keyboard: rows,
+      });
+    }
+    return sendMessage(env, chatId, text, { inline_keyboard: rows });
   }
 
   const checkoutMatch = /^gateway:(\d{1,6}):(telebirr|mpesa|cbe)$/.exec(
@@ -258,25 +283,19 @@ async function onCallback(query: TgCallback, env: Env) {
     gateway,
     createdAt: Date.now(),
   };
-  await env.SESSIONS.put(pendingKey(userId), JSON.stringify(pending), {
-    expirationTtl: PENDING_TTL_SECONDS,
-  });
 
-  try {
-    return await sendMessage(
-      env,
-      chatId,
-      `You chose <b>${gatewayLabel(gateway)}</b> for <b>${formatEtb(amount)}</b>.\n\n` +
-        `Send ${phoneHint(gateway)} so the payment request can be sent. Tap the button below or type it, e.g. <code>${phoneExample(gateway)}</code>.\n\n` +
-        `<i>Your number is used only to start this payment and isn’t stored by this bot.</i>`,
-      phoneKeyboard(gateway),
-    );
-  } catch (error) {
-    // If the prompt never reached the user, don't leave a pending state that
-    // would swallow their next message.
-    await clearPending(env, userId);
-    throw error;
-  }
+  // The amount/gateway message has served its purpose.
+  if (messageId) await deleteMessage(env, chatId, messageId);
+
+  return promptForPhone(
+    env,
+    chatId,
+    userId,
+    pending,
+    `You chose <b>${gatewayLabel(gateway)}</b> for <b>${formatEtb(amount)}</b>.\n\n` +
+      `Reply with ${phoneHint(gateway)} so the payment request can be sent, e.g. <code>${phoneExample(gateway)}</code>.\n\n` +
+      `<i>Your number is used only to start this payment and isn’t stored by this bot.</i>`,
+  );
 }
 
 async function handleContact(message: TgMessage, env: Env) {
@@ -290,13 +309,10 @@ async function handleContact(message: TgMessage, env: Env) {
       "I couldn’t identify this Telegram account. Send /donate to start again.",
     );
   }
-  if (contact.user_id !== undefined && contact.user_id !== userId) {
-    return sendMessage(
-      env,
-      chatId,
-      "Please share your own phone number, not someone else’s.",
-      phoneKeyboard(),
-    );
+
+  // Never leave a contact card (or someone else's number) in the chat.
+  if (message.message_id) {
+    await deleteMessage(env, chatId, message.message_id);
   }
 
   const pending = await getPending(env, userId);
@@ -309,13 +325,24 @@ async function handleContact(message: TgMessage, env: Env) {
     );
   }
 
-  const phone = normalizeEthiopianPhone(contact.phone_number, pending.gateway);
-  if (!phone) {
-    return sendMessage(
+  if (contact.user_id !== undefined && contact.user_id !== userId) {
+    return promptForPhone(
       env,
       chatId,
-      `That number doesn’t match ${phoneHint(pending.gateway)}. Type it instead, e.g. <code>${phoneExample(pending.gateway)}</code>.`,
-      phoneKeyboard(pending.gateway),
+      userId,
+      pending,
+      "Please share your own phone number, not someone else’s. Reply with your number.",
+    );
+  }
+
+  const phone = normalizeEthiopianPhone(contact.phone_number, pending.gateway);
+  if (!phone) {
+    return promptForPhone(
+      env,
+      chatId,
+      userId,
+      pending,
+      `That number doesn’t match ${phoneHint(pending.gateway)}. Reply with it instead, e.g. <code>${phoneExample(pending.gateway)}</code>.`,
     );
   }
 
@@ -329,6 +356,11 @@ async function completeCheckout(
   pending: PendingCheckout,
   phone: string,
 ) {
+  // The ForceReply prompt is no longer needed.
+  if (pending.promptMessageId) {
+    await deleteMessage(env, chatId, pending.promptMessageId);
+  }
+
   if (Date.now() - pending.createdAt > PENDING_TTL_SECONDS * 1000) {
     await clearPending(env, userId);
     return sendMessage(
@@ -340,15 +372,8 @@ async function completeCheckout(
   }
 
   await clearPending(env, userId);
-  // Don't let a failed status message block the actual checkout.
-  void sendMessage(
-    env,
-    chatId,
-    "Creating your secure checkout…",
-    removeKeyboard(),
-  ).catch((error) =>
-    console.warn("Could not send progress message", errorMessage(error)),
-  );
+  // A typing indicator beats a "creating..." message that would need deleting.
+  void sendChatAction(env, chatId, "typing");
 
   const payment = paymentClient(env);
   let checkout: CheckoutResult;
@@ -467,8 +492,24 @@ async function cancelDonation(
   env: Env,
   chatId: number,
   userId: number | undefined,
+  messageId?: number,
 ) {
-  if (userId) await clearPending(env, userId);
+  if (userId) {
+    const pending = await getPending(env, userId);
+    if (pending?.promptMessageId) {
+      await deleteMessage(env, chatId, pending.promptMessageId);
+    }
+    await clearPending(env, userId);
+  }
+  if (messageId) {
+    return editMessageText(
+      env,
+      chatId,
+      messageId,
+      "Cancelled. Send /donate whenever you want to donate.",
+      { inline_keyboard: [] },
+    );
+  }
   return sendMessage(
     env,
     chatId,
@@ -503,23 +544,41 @@ function phoneExample(gateway: Gateway) {
   return gateway === "mpesa" ? "0712345678" : "0912345678";
 }
 
-function phoneKeyboard(gateway: Gateway = "telebirr") {
+function phonePlaceholder(gateway: Gateway) {
+  return gateway === "mpesa" ? "07xx xxx xxx" : "09xx xxx xxx";
+}
+
+function forceReply(placeholder: string) {
   return {
-    keyboard: [
-      [
-        {
-          text: "📱 Share my phone number",
-          request_contact: true,
-          style: "success",
-        },
-      ],
-      [{ text: "Cancel", style: "danger" }],
-    ],
-    resize_keyboard: true,
-    one_time_keyboard: true,
-    input_field_placeholder:
-      gateway === "mpesa" ? "07xx xxx xxx" : "09xx xxx xxx",
+    force_reply: true,
+    input_field_placeholder: placeholder,
   };
+}
+
+/**
+ * Send (or replace) the phone prompt as a ForceReply. The message id is stored
+ * with the pending checkout so the prompt can be removed once it is used.
+ */
+async function promptForPhone(
+  env: Env,
+  chatId: number,
+  userId: number,
+  pending: PendingCheckout,
+  text: string,
+): Promise<void> {
+  if (pending.promptMessageId) {
+    await deleteMessage(env, chatId, pending.promptMessageId);
+  }
+  const messageId = await sendMessageGetId(
+    env,
+    chatId,
+    text,
+    forceReply(phonePlaceholder(pending.gateway)),
+  );
+  const updated: PendingCheckout = { ...pending, promptMessageId: messageId };
+  await env.SESSIONS.put(pendingKey(userId), JSON.stringify(updated), {
+    expirationTtl: PENDING_TTL_SECONDS,
+  });
 }
 
 function removeKeyboard() {

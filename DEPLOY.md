@@ -312,7 +312,7 @@ A healthy response looks like:
 }
 ```
 
-Then open the bot in Telegram and send `/start`. You should get the amount keyboard. Pick an amount, pick a gateway, then share the mobile number registered with that account (use the **Share my phone number** button or type `0912345678`) — the payment provider needs it to send the payment request. Follow the checkout and pay: the bot should message you automatically when the webhook arrives, without sending `/status`. `/halloffame` (also works in groups) shows the top 3 donors once a payment completes.
+Then open the bot in Telegram and send `/start`. You should get the amount keyboard. Pick an amount, pick a gateway, then reply to the prompt with the mobile number registered with that account (for example `0912345678`) — the payment provider needs it to send the payment request. Follow the checkout and pay: the bot should message you automatically when the webhook arrives, without sending `/status`. `/halloffame` (also works in groups) shows the top 3 donors once a payment completes.
 
 If `/health` is not `ok`:
 

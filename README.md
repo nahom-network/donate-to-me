@@ -8,7 +8,7 @@ A small Telegram bot that lets people choose a donation amount, select Telebirr,
 
 1. `/donate` — pick an amount from the colored inline buttons.
 2. Pick Telebirr, M-Pesa, or CBE Birr.
-3. Share the mobile number registered with that account. Use the **Share my phone number** button or type it.
+3. Reply to the bot's prompt with the mobile number registered with that account (the prompt uses ForceReply; spaces and dashes are fine).
    - M-Pesa: a Safaricom number starting with `07` or `+2517` (e.g. `0712345678`).
    - Telebirr and CBE Birr: an Ethio Telecom number starting with `09` or `+2519` (e.g. `0912345678`).
 
@@ -93,7 +93,7 @@ The payer's phone number and the payment API key are not stored in D1. The phone
 `POST /webhooks/payments` receives signed events from the payment provider:
 
 - `order.completed` — marks the matching donation `completed`, stores the order id, and messages the donor.
-- `checkout.session.expired` — marks a pending donation `expired`.
+- `checkout.session.expired` — marks a pending donation `expired` and tells the payer why (canceled, timed out, rejected, …).
 
 The handler verifies `X-JamiDev-Signature` against the **raw** request body using `JAMI_WEBHOOK_SECRET`, returns `400` on a bad signature, and skips repeated event ids. `/status` polling and the 15-minute cron remain as fallbacks, so a missed delivery still reconciles.
 
@@ -153,6 +153,6 @@ One more thing to rule out: a bot started with `pnpm run dev` only answers while
 
 ## Test flow
 
-Use a test API key and a test-mode pay-what-you-want product. Send `/start` to the bot, choose an amount, select a gateway, then share a phone number that matches it (`07…` for M-Pesa, `09…` for Telebirr/CBE, or use the contact button). Open the checkout link and complete the sandbox flow. The bot should message you automatically when the webhook arrives, without sending `/status`. Confirm both a pending state and a completed state, and that `/halloffame` lists the donor with their aggregated total. Also confirm that a mismatched prefix is rejected, check `/status` after an expired checkout, and try `/cancel` while the bot is waiting for the phone number.
+Use a test API key and a test-mode pay-what-you-want product. Send `/start` to the bot, choose an amount, select a gateway, then reply with a phone number that matches it (`07…` for M-Pesa, `09…` for Telebirr/CBE). Open the checkout link and complete the sandbox flow. The bot should message you automatically when the webhook arrives, without sending `/status`. Confirm both a pending state and a completed state, and that `/halloffame` lists the donor with their aggregated total. Also confirm that a mismatched prefix is rejected, check `/status` after an expired checkout, and try `/cancel` while the bot is waiting for the phone number.
 
 If the test key shared in chat is used outside this private test, rotate it in the provider dashboard and set the replacement as the Worker secret.

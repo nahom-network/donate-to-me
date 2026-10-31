@@ -32,6 +32,7 @@ export type TgContact = {
 };
 
 export type TgMessage = {
+  message_id?: number;
   chat: TgChat;
   from?: TgUser;
   text?: string;
@@ -42,7 +43,7 @@ export type TgCallback = {
   id: string;
   data?: string;
   from: TgUser;
-  message?: { chat: TgChat };
+  message?: { message_id?: number; chat: TgChat };
 };
 
 export type TgUpdate = {
@@ -71,6 +72,8 @@ export type PendingCheckout = {
   amount: number;
   gateway: Gateway;
   createdAt: number;
+  /** Message id of the ForceReply phone prompt, so it can be cleaned up. */
+  promptMessageId?: number;
 };
 
 export type TelegramResult<T> = {

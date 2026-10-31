@@ -13,9 +13,9 @@ import {
   upsertDonation,
 } from "./db";
 import { sendMessage } from "./telegram";
-import { errorMessage, formatEtb, json } from "./util";
+import { errorMessage, escapeHtml, formatEtb, json } from "./util";
 
-type Notification = { userId: number; amountMinor: number };
+type Notification = { userId: number; text: string };
 
 /**
  * POST /webhooks/payments
@@ -102,7 +102,10 @@ async function applyEvent(
 
     if (existing) {
       return changed
-        ? { userId: existing.userId, amountMinor: existing.amountMinor }
+        ? {
+            userId: existing.userId,
+            text: `✅ Payment received — thank you for donating ${formatEtb(existing.amountMinor / 100)}!`,
+          }
         : null;
     }
 
@@ -131,24 +134,58 @@ async function applyEvent(
       },
       true,
     );
-    return { userId, amountMinor: amount };
+    return {
+      userId,
+      text: `✅ Payment received — thank you for donating ${formatEtb(amount / 100)}!`,
+    };
   }
 
   if (event.type === "checkout.session.expired") {
-    await markDonationExpired(env, event.data.sessionId);
-    return null;
+    const existing = await getDonationBySession(env, event.data.sessionId);
+    const changed = await markDonationExpired(env, event.data.sessionId);
+    // Only tell the payer once, and only if this was a pending donation.
+    if (!changed || !existing) return null;
+    return {
+      userId: existing.userId,
+      text: expiredText(event.data.failure),
+    };
   }
 
   return null;
 }
 
+function expiredText(
+  failure: { code?: string; message?: string } | null | undefined,
+): string {
+  let reason = "The payment didn’t complete.";
+  switch (failure?.code) {
+    case "payment_rejected":
+      reason = "The payment was rejected by the provider.";
+      break;
+    case "payment_failed":
+      reason = "The payment failed.";
+      break;
+    case "payment_canceled":
+      reason = "You canceled the payment.";
+      break;
+    case "payment_timed_out":
+      reason = "The payment request timed out.";
+      break;
+    case "initiate_failed":
+      reason = "The payment couldn’t be started.";
+      break;
+    case "session_expired":
+      reason = "The checkout expired.";
+      break;
+  }
+
+  const detail = failure?.message ? `\n\n${escapeHtml(failure.message)}` : "";
+  return `⌛ ${reason}${detail}\n\nSend /donate to try again.`;
+}
+
 async function notifyDonor(env: Env, info: Notification): Promise<void> {
   try {
-    await sendMessage(
-      env,
-      info.userId,
-      `✅ Payment received — thank you for donating ${formatEtb(info.amountMinor / 100)}!`,
-    );
+    await sendMessage(env, info.userId, info.text);
   } catch (error) {
     console.warn("Could not notify donor", errorMessage(error));
   }

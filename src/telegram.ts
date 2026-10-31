@@ -68,6 +68,70 @@ export async function sendMessage(
   });
 }
 
+export async function sendMessageGetId(
+  env: Env,
+  chatId: number,
+  text: string,
+  replyMarkup?: unknown,
+): Promise<number | undefined> {
+  const result = await telegram<{ message_id: number }>(env, "sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+  });
+  return result?.message_id;
+}
+
+export async function editMessageText(
+  env: Env,
+  chatId: number,
+  messageId: number,
+  text: string,
+  replyMarkup?: unknown,
+): Promise<void> {
+  try {
+    await telegram(env, "editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
+    });
+  } catch (error) {
+    console.warn("Could not edit message", errorMessage(error));
+  }
+}
+
+export async function deleteMessage(
+  env: Env,
+  chatId: number,
+  messageId: number,
+): Promise<void> {
+  try {
+    await telegram(env, "deleteMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+    });
+  } catch (error) {
+    console.warn("Could not delete message", errorMessage(error));
+  }
+}
+
+export async function sendChatAction(
+  env: Env,
+  chatId: number,
+  action = "typing",
+): Promise<void> {
+  try {
+    await telegram(env, "sendChatAction", { chat_id: chatId, action });
+  } catch (error) {
+    console.warn("Could not send chat action", errorMessage(error));
+  }
+}
+
 export async function answerCallback(
   env: Env,
   callbackQueryId: string,
