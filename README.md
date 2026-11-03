@@ -9,6 +9,8 @@ A small Telegram bot that lets people choose a donation amount, select Telebirr,
 
 **New here?** Follow [DEPLOY.md](DEPLOY.md) for the full from-zero setup: Cloudflare login, KV namespace, secrets, deploy, Telegram webhook, and verification.
 
+The same Worker also serves a private admin dashboard at `/admin`: a React + Vite control room with Telegram OIDC login, an admin allowlist by Telegram user id, live revenue charts, checkout search, supporter lifetime value, and webhook/system health. See [Admin dashboard](#admin-dashboard).
+
 ## How a donation works
 
 1. `/donate` — pick an amount from the colored inline buttons.
@@ -76,6 +78,49 @@ Button colors use the `style` field added in Bot API 9.4 (blue = primary, green 
 
     Secrets take effect immediately; no redeploy is needed.
 
+## Admin dashboard
+
+Open `https://<YOUR_WORKER_HOST>/admin` and sign in with Telegram. Nothing is public: the dashboard API refuses every request without a valid, allowlisted session cookie.
+
+**What it shows**
+
+- **Overview** — settled revenue for the selected 7/30/90-day window, growth against the previous window, checkouts in flight, today and last-24-hour totals, settlement rate, a daily value/volume chart, payment-rail split, the newest checkouts, and all-time top supporters.
+- **Donations** — searchable, filterable ledger (status + rail) with a detail drawer: supporter identity, timeline, amount, rail, order id, session id, and Telegram id.
+- **Supporters** — lifetime giving aggregated across completed donations, with a podium, search, and per-donor averages.
+- **System** — `/health` data, webhook registration and delivery state, configuration checklist, the allowlist (with a copyable `ADMIN_TELEGRAM_IDS` line), OIDC/session policy, and a background reconciliation runner that reports what it recovered.
+
+**How access works**
+
+1. Create a bot and open **BotFather → your bot → Login Widget**. Add `https://<YOUR_WORKER_HOST>` and the exact callback `https://<YOUR_WORKER_HOST>/admin/auth/callback` as allowed URLs. Copy the **Client ID** and **Client Secret**.
+2. Put the client id and the allowed Telegram ids in `wrangler.toml`:
+
+   ```toml
+   [vars]
+   TELEGRAM_OIDC_CLIENT_ID = "123456789"
+   ADMIN_TELEGRAM_IDS = "111111111,222222222"
+   ```
+
+   Split multiple ids with commas. Leave the list empty to disable dashboard access entirely.
+3. Store the secret (and optionally a separate session-signing secret):
+
+   ```sh
+   pnpm exec wrangler secret put TELEGRAM_OIDC_CLIENT_SECRET
+   pnpm exec wrangler secret put ADMIN_SESSION_SECRET   # optional but recommended
+   ```
+
+4. Deploy. `pnpm run deploy` builds the dashboard first, then uploads the Worker and assets together.
+
+The login flow uses OIDC authorization code + PKCE. The Worker verifies the ID token signature against Telegram's JWKS, checks the issuer/audience/expiry, and only then issues a signed `HttpOnly`, `SameSite=Lax` cookie (12 hours). The allowlist is re-checked on every API request, so removing an id revokes access immediately. The dashboard cannot mutate donation state; the only write action is the idempotent reconciliation runner.
+
+**Local dashboard development**
+
+```sh
+pnpm run dev        # builds the dashboard, then wrangler dev on :8787
+pnpm run dev:web    # Vite on :5173/dashboard/ with HMR, proxies /admin/* to :8787
+```
+
+`pnpm run dev:web` is for UI work. The OIDC redirect must come back to the Worker origin, so test full sign-in on a deployed Worker or an HTTPS tunnel. The checked-in `wrangler.toml` keeps the asset directory at `public/`; `public/dashboard/` is generated and git-ignored.
+
 ## Chat commands
 
 - `/start` or `/donate` — choose an amount and payment rail.
@@ -115,6 +160,8 @@ curl -X POST "https://<YOUR_WORKER_HOST>/admin/reconcile" \
 
 The response reports how many sessions were checked, completed, expired, or skipped, with any errors. The Telegram webhook secret also works as the admin secret.
 
+The same recovery run is available to allowlisted admins from **System → Reconcile checkouts**. It executes in the background, stores its last summary in KV, and the dashboard polls that summary, so a slow payment API cannot make the browser request time out.
+
 ## Project structure
 
 | File                                              | Purpose                                                |
@@ -123,11 +170,14 @@ The response reports how many sessions were checked, completed, expired, or skip
 | `src/bot.ts`                                      | Telegram updates, donation flow, `/halloffame`         |
 | `src/webhooks.ts`                                 | Signed payment webhook handler                         |
 | `src/db.ts`                                       | D1 users, donations, reconciliation, leaderboard query |
+| `src/admin.ts`                                    | `/admin` routes, Telegram OIDC/PKCE, sessions, admin API |
+| `src/admin-db.ts`                                 | Batched dashboard queries (overview, ledger, donors)   |
 | `src/session.ts`                                  | KV sessions, pending choices, update dedupe            |
 | `src/payment.ts`                                  | Payment API client with timeouts                       |
 | `src/telegram.ts`                                 | Telegram API client with retries                       |
 | `src/health.ts`                                   | `/health`, webhook watchdog, bot profile               |
 | `src/constants.ts`, `src/types.ts`, `src/util.ts` | Shared constants, types, helpers                       |
+| `web/`                                            | React + Vite admin dashboard (built to `public/dashboard`) |
 
 ## When the bot stops responding
 
@@ -162,3 +212,5 @@ One more thing to rule out: a bot started with `pnpm run dev` only answers while
 Use a test API key and a test-mode pay-what-you-want product. Send `/start` to the bot, choose an amount, select a gateway, then reply with a phone number that matches it (`07…` for M-Pesa, `09…` for Telebirr/CBE). Open the checkout link and complete the sandbox flow. The bot should message you automatically when the webhook arrives, without sending `/status`. Confirm both a pending state and a completed state, and that `/halloffame` lists the donor with their aggregated total. Also confirm that a mismatched prefix is rejected, check `/status` after an expired checkout, and try `/cancel` while the bot is waiting for the phone number.
 
 If the test key shared in chat is used outside this private test, rotate it in the provider dashboard and set the replacement as the Worker secret.
+
+For the dashboard, sign in at `/admin` with an allowlisted Telegram account and confirm the overview totals match the D1 rows (`/admin/api/donations` is the same data the ledger renders). Sign in with a non-allowlisted account to confirm the `not_allowed` error, and check that removing an id from `ADMIN_TELEGRAM_IDS` and redeploying immediately rejects the existing cookie.
