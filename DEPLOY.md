@@ -22,6 +22,7 @@ curl.exe -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" --data-urlenco
 # create the endpoint https://<HOST>/webhooks/payments in the provider dashboard, then:
 pnpm exec wrangler secret put JAMI_WEBHOOK_SECRET
 curl.exe https://<HOST>/health
+# optional dashboard: BotFather → Login Widget → OIDC client id/secret + ADMIN_TELEGRAM_IDS, then redeploy
 ```
 
 The steps below explain each command, its output, and how to check it worked.
@@ -38,6 +39,8 @@ The steps below explain each command, its output, and how to check it worked.
 | Payment webhook secret | Shown once when you create the endpoint (step 7b) | Secret `JAMI_WEBHOOK_SECRET`                              |
 | KV namespace       | Created in step 3                                | `wrangler.toml`                                               |
 | D1 database        | Created in step 3                                | `wrangler.toml`                                               |
+| Telegram OIDC client id + secret | BotFather → your bot → **Login Widget** (step 6b) | Var `TELEGRAM_OIDC_CLIENT_ID`, secret `TELEGRAM_OIDC_CLIENT_SECRET` |
+| Admin Telegram ids | Your Telegram account id (step 6b)               | Var `ADMIN_TELEGRAM_IDS`                                      |
 
 Also install Node.js 20+ and pnpm 9+.
 
@@ -124,10 +127,13 @@ pnpm run db:migrate          # remote database
 pnpm run db:migrate:local    # for `wrangler dev`
 ```
 
-The migration in `migrations/0001_users_and_donations.sql` creates:
+The migrations create:
 
 - `users` — one row per person who interacts with the bot (`id`, names, first/last seen, interaction count).
 - `donations` — one row per checkout, linked to `users.id` by foreign key, with amount, gateway, status and order reference.
+- `0002_dashboard_indexes.sql` — read indexes for the dashboard timeline and donor queries.
+
+Apply both migrations before opening `/admin` on an existing deployment.
 
 Inspect it with:
 
@@ -154,10 +160,16 @@ binding = "DB"
 database_name = "donate-to-me"
 database_id = "<the database_id from step 3>"
 
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
 [vars]
 JAMI_PRODUCT_ID = "p_xxxxxxxx"          # your pay-what-you-want product
 DONATION_AMOUNTS = "50,100,250,500"     # optional, ETB
 START_IMAGE_URL = ""                    # optional, public image URL for /start
+TELEGRAM_OIDC_CLIENT_ID = ""            # BotFather → Login Widget → Client ID
+ADMIN_TELEGRAM_IDS = ""                 # comma-separated Telegram user ids
 # Optional but recommended. The public URL used by the 15-minute watchdog.
 # WEBHOOK_URL = "https://donate-to-me.<your-subdomain>.workers.dev/telegram/webhook"
 
@@ -168,8 +180,10 @@ crons = ["*/15 * * * *"]
 Notes:
 
 - `DONATION_AMOUNTS` is a comma-separated list of whole ETB amounts. Invalid entries are ignored; if none survive, the defaults `50,100,250,500` are used.
-- `START_IMAGE_URL` is an optional public image URL used as the `/start` photo. Leave it empty to use the bundled `src/assets/sticker.webp`; Telegram fetches the URL server-side.
+- `START_IMAGE_URL` is an optional public image URL used as the `/start` photo. Leave it empty to use the bundled `public/sticker.webp`; Telegram fetches the URL server-side.
 - `WEBHOOK_URL` must be the exact URL you register in step 7 and must end in `/telegram/webhook`. Setting it lets the watchdog restore a webhook that was deleted before the Worker ever saw an update. If omitted, the Worker learns its URL from the first update it receives.
+- `TELEGRAM_OIDC_CLIENT_ID` and `ADMIN_TELEGRAM_IDS` are filled in step 6b. The dashboard stays disabled while either is empty.
+- `[assets]` must keep `binding = "ASSETS"`: the Worker reads the built SPA shell through `env.ASSETS` for `/admin`. The directory also holds `sticker.webp`, so do not point it at the Vite output directly.
 - The cron trigger is part of the file, so it is created by the first deploy. No dashboard action is needed.
 
 ## 5. Set the Worker secrets
@@ -213,6 +227,8 @@ pnpm run typecheck
 pnpm run deploy
 ```
 
+`deploy` builds the React dashboard (`vite build` → `public/dashboard/`) and then uploads the Worker plus `public/` assets. The dashboard is not a separate deployment.
+
 `deploy` prints the Worker URL, for example:
 
 ```
@@ -222,6 +238,37 @@ https://donate-to-me.your-subdomain.workers.dev
 Use that host in the next step. If you deploy with a custom domain or a route, use that URL instead.
 
 The deploy also creates the 15-minute cron trigger. Any later `pnpm run deploy` replaces the code but keeps the KV data, secrets, and cron.
+
+## 6b. Enable the admin dashboard
+
+The dashboard lives at `https://<YOUR_WORKER_HOST>/admin` and uses Telegram OIDC. Skipping this step leaves `/admin` locked (the login page shows which pieces are missing).
+
+1. Open [@BotFather](https://t.me/BotFather), select your bot, and choose **Login Widget**.
+2. Add both allowed URLs, using the exact host from step 6 (no trailing slash on the callback):
+   - `https://<YOUR_WORKER_HOST>`
+   - `https://<YOUR_WORKER_HOST>/admin/auth/callback`
+3. Copy the **Client ID** and **Client Secret** shown in that screen. Keep the default **RS256** signing algorithm under **Advanced**; the Worker verifies RS256 and ES256 tokens.
+4. Put the client id and your Telegram user id(s) in `wrangler.toml`:
+
+   ```toml
+   TELEGRAM_OIDC_CLIENT_ID = "123456789"
+   ADMIN_TELEGRAM_IDS = "111111111,222222222"
+   ```
+
+   The ids are numeric Telegram user ids, not usernames. Split multiple ids with commas; empty disables dashboard access. You can get your id from [@userinfobot](https://t.me/userinfobot).
+5. Store the client secret as a Worker secret, plus a separate session-signing secret:
+
+   ```sh
+   pnpm exec wrangler secret put TELEGRAM_OIDC_CLIENT_SECRET
+   pnpm exec wrangler secret put ADMIN_SESSION_SECRET
+   ```
+
+   `ADMIN_SESSION_SECRET` is optional; without it the OIDC client secret also signs the admin cookie. Use a long random value (32+ bytes).
+6. Redeploy (`pnpm run deploy`) and open `https://<YOUR_WORKER_HOST>/admin`.
+
+If you use a custom domain or a route, set `ADMIN_BASE_URL` in `wrangler.toml` to that origin and register the same origin + `/admin/auth/callback` in BotFather. The callback URL is computed from the request origin by default.
+
+The Worker verifies the OIDC ID token signature against Telegram's JWKS, checks `iss`, `aud`, and `exp`, and re-checks `ADMIN_TELEGRAM_IDS` on every API request. Sessions are HttpOnly cookies with a 12-hour lifetime. The dashboard makes no donation mutations; the only write action is the idempotent reconciliation runner.
 
 ## 7. Register the Telegram webhook
 
@@ -355,6 +402,11 @@ TELEGRAM_WEBHOOK_SECRET=some-local-secret
 JAMI_TOKEN=jamidev_test_...
 JAMI_PRODUCT_ID=p_test_product
 JAMI_WEBHOOK_SECRET=some-local-webhook-secret
+# Optional local dashboard config; any real Telegram id can be allowlisted.
+TELEGRAM_OIDC_CLIENT_ID=123456789
+TELEGRAM_OIDC_CLIENT_SECRET=test-oidc-secret
+ADMIN_TELEGRAM_IDS=111111111
+ADMIN_SESSION_SECRET=test-session-secret
 ```
 
 `wrangler dev` only reads secrets from `.dev.vars` — dashboard secrets are not downloaded.
@@ -363,7 +415,7 @@ JAMI_WEBHOOK_SECRET=some-local-webhook-secret
 pnpm run dev
 ```
 
-This starts <http://127.0.0.1:8787> with simulated local KV and D1 storage. Apply the schema once with `pnpm run db:migrate:local`; local data lives in `.wrangler/state`.
+This builds the dashboard, then starts <http://127.0.0.1:8787> with simulated local KV and D1 storage. Apply the schema once with `pnpm run db:migrate:local`; local data lives in `.wrangler/state`. Use `pnpm run dev:web` for Vite HMR on <http://localhost:5173/dashboard/> (it proxies `/admin/api` and `/admin/auth` to the Worker). Full OIDC sign-in still needs a public HTTPS origin, so test it on a deployed Worker or through a tunnel and register that exact callback in BotFather.
 
 Telegram cannot reach `localhost`. To exercise the real webhook flow you need either a tunnel (e.g. `cloudflared tunnel --url http://127.0.0.1:8787`) registered with `setWebhook`, or a deployed staging Worker. A tunnel URL changes when it restarts, so re-register the webhook each time.
 
@@ -383,7 +435,9 @@ pnpm run deploy
 - Code changes: redeploy. KV data, secrets, and the webhook stay as they are.
 - Variable changes in `wrangler.toml`: redeploy.
 - Secret changes: `wrangler secret put <NAME>` (effective immediately).
-- New hostname: repeat step 7 and update `WEBHOOK_URL`.
+- New hostname: repeat step 7 and update `WEBHOOK_URL`; also add the new origin + `/admin/auth/callback` to BotFather and optionally set `ADMIN_BASE_URL`.
+- Dashboard UI changes: `pnpm run deploy` rebuilds `public/dashboard/`; `pnpm run build:web` alone is enough to check the bundle.
+- Allowlist changes: edit `ADMIN_TELEGRAM_IDS` and redeploy. Existing sessions for removed ids stop working on the next request.
 
 ## Rotating a leaked token
 
@@ -422,6 +476,14 @@ pnpm exec wrangler d1 delete donate-to-me
   `curl -X POST "https://<HOST>/admin/reconcile" -H "X-Admin-Secret: <ADMIN_SECRET>"`.
   The 15-minute cron also backfills from KV sessions once the binding is correct.
 - Deploy succeeds but the bot replies "Payment setup incomplete" → `JAMI_PRODUCT_ID` is still `REPLACE_...` or `JAMI_TOKEN` is unset.
+- `/admin` shows "Dashboard bundle missing" — `public/dashboard/` was not built. Run `pnpm run build:web` or deploy with `pnpm run deploy` (which builds first).
+- `/admin` shows "Dashboard login is not configured" — `TELEGRAM_OIDC_CLIENT_ID`, `ADMIN_TELEGRAM_IDS`, or the OIDC client secret is missing. Repeat step 6b; the login card lists the missing pieces.
+- Telegram says "not an admin" — the signed-in Telegram id is not in `ADMIN_TELEGRAM_IDS`. Use the numeric id (not `@username`), and redeploy after editing.
+- "Telegram rejected the sign-in" — the client id/secret do not match BotFather, or the redirect URI is not registered exactly. Register `https://<HOST>/admin/auth/callback` and check `ADMIN_BASE_URL`.
+- "That sign-in attempt expired" — the 10-minute OIDC state expired or was already used. Start the login again.
+- Dashboard shows 401 after being idle — the 12-hour session cookie expired. Reload `/admin` and sign in again.
+- `/admin/api/*` returns 401 in a script — the admin cookie is signed and HttpOnly; call it from the signed-in browser, not with `curl`.
+- System page says "unavailable" for the webhook — Telegram `getWebhookInfo` failed; check `TELEGRAM_BOT_TOKEN` and `/health`.
 - Bot does not answer at all → `curl /health`, check `wrangler tail`, and confirm the webhook URL is the current hostname.
 - Responses stop after a while → run `POST /telegram/repair` and check `/health`; the 15-minute cron will also self-heal a lost webhook. If the Worker is on the free plan, confirm you have not hit the daily request limit in the dashboard.
 - Telegram reports `401 Unauthorized` errors → `TELEGRAM_WEBHOOK_SECRET` and the `secret_token` passed to `setWebhook` differ.
