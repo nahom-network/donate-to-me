@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit",
+    "dev": "vite build && wrangler dev",
+    "dev:web": "vite",
+    "build:web": "vite build",
+    "deploy": "vite build && wrangler deploy",
+    "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
     "db:migrate": "wrangler d1 migrations apply donate-to-me --remote",
     "db:migrate:local": "wrangler d1 migrations apply donate-to-me --local"
   },
@@ -27,11 +29,26 @@
       "START_IMAGE_URL": {
         "description": "Optional public image URL for the /start message. Leave empty to use the bundled sticker."
       },
+      "TELEGRAM_OIDC_CLIENT_ID": {
+        "description": "BotFather → Login Widget → Client ID. Enables the /admin dashboard."
+      },
+      "ADMIN_TELEGRAM_IDS": {
+        "description": "Comma-separated Telegram user ids allowed to open /admin. Leave empty to disable dashboard access."
+      },
+      "ADMIN_BASE_URL": {
+        "description": "Optional public origin for the dashboard, used to build the OIDC redirect URI when it differs from the request host."
+      },
       "TELEGRAM_BOT_TOKEN": {
         "description": "Your Telegram bot token from @BotFather. Keep this secret."
       },
       "TELEGRAM_WEBHOOK_SECRET": {
         "description": "Your Telegram webhook secret token. Keep this secret."
+      },
+      "TELEGRAM_OIDC_CLIENT_SECRET": {
+        "description": "BotFather → Login Widget → Client Secret. Keep this secret."
+      },
+      "ADMIN_SESSION_SECRET": {
+        "description": "Optional long random string used to sign admin sessions. Falls back to the OIDC client secret."
       },
       "JAMI_TOKEN": {
         "description": "Your Jami API token. Keep this secret."
@@ -40,16 +57,27 @@
         "description": "Your Jami webhook secret token. Keep this secret."
       },
       "ADMIN_SECRET": {
-        "description": "Your admin secret token. Keep this secret."
+        "description": "Your admin secret token for /admin/reconcile. Keep this secret."
       }
     }
   },
   "dependencies": {
-    "jami-sdk": "^0.4.0"
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
+    "jami-sdk": "^0.4.0",
+    "lucide-react": "^1.67.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261031.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
     "typescript": "^5.9.3",
+    "vite": "^8.3.5",
     "wrangler": "^4.40.0"
   }
 }
