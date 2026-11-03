@@ -11,8 +11,12 @@ binding = "SESSIONS"
 binding = "DB"
 database_name = "donate-to-me"
 
+# The built React dashboard lands in public/dashboard at deploy time.
+# sticker.webp also lives here so the bot's /start photo keeps working.
 [assets]
-directory = "./src/assets"
+directory = "./public"
+# Exposes env.ASSETS so /admin can serve the SPA shell itself.
+binding = "ASSETS"
 
 # Users can customize these during deployment
 [vars]
@@ -21,6 +25,12 @@ DONATION_AMOUNTS = "1,5,10,50,100,250,500"
 WEBHOOK_URL = ""
 # Optional: public image URL for /start. Empty uses the bundled sticker.
 START_IMAGE_URL = ""
+# Admin dashboard (https://<host>/admin). Get the client id/secret from
+# BotFather → your bot → Login Widget. The allowlist is Telegram user ids.
+TELEGRAM_OIDC_CLIENT_ID = "8507119974"
+ADMIN_TELEGRAM_IDS = "1028671687"
+# Optional: pin the public origin used for the OIDC redirect URI, e.g.
+# ADMIN_BASE_URL = "https://donate-to-me.example.workers.dev"
 
 [triggers]
 crons = ["*/15 * * * *"]

@@ -14,8 +14,20 @@ export interface Env {
   START_IMAGE_URL?: string;
   /** Protects the manual /admin/reconcile endpoint. */
   ADMIN_SECRET?: string;
+  /** Telegram OIDC client id from BotFather → Login Widget. */
+  TELEGRAM_OIDC_CLIENT_ID?: string;
+  /** Telegram OIDC client secret. Store with `wrangler secret put`. */
+  TELEGRAM_OIDC_CLIENT_SECRET?: string;
+  /** Comma/space separated Telegram user ids allowed into /admin. */
+  ADMIN_TELEGRAM_IDS?: string;
+  /** Optional override for the public dashboard origin (redirect URI base). */
+  ADMIN_BASE_URL?: string;
+  /** HMAC key for the admin session cookie; falls back to the OIDC secret. */
+  ADMIN_SESSION_SECRET?: string;
   SESSIONS: KVNamespace;
   DB: D1Database;
+  /** Static assets binding used to serve the built React dashboard. */
+  ASSETS: Fetcher;
 }
 
 export type TgUser = {

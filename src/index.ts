@@ -1,4 +1,5 @@
 import type { Env, TgUpdate } from "./types";
+import { handleAdmin } from "./admin";
 import { handleUpdate } from "./bot";
 import { reconcileDonations, reconcileSessions } from "./db";
 import {
@@ -30,6 +31,12 @@ export default {
     }
     if (url.pathname === "/admin/reconcile") {
       return adminReconcile(request, env);
+    }
+
+    // Admin dashboard: OIDC login, read-only analytics API, and the built
+    // React app. Legacy /admin/reconcile above stays secret-based.
+    if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
+      return handleAdmin(request, env, ctx);
     }
 
     // Signed payment events from the payment provider.
