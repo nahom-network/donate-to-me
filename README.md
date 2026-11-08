@@ -46,13 +46,14 @@ Button colors use the `style` field added in Bot API 9.4 (blue = primary, green 
 
    ```sh
    pnpm exec wrangler secret put JAMI_TOKEN
+   pnpm exec wrangler secret put JAMI_PRODUCT_ID
    pnpm exec wrangler secret put JAMI_WEBHOOK_SECRET
    pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN
    ```
 
-   The API token should be a test token while testing. Use a long random string for `JAMI_WEBHOOK_SECRET`.
+   The API token should be a test token while testing. Use a long random string for `JAMI_WEBHOOK_SECRET`. `JAMI_PRODUCT_ID` is a secret on purpose: a `[vars]` entry would be overwritten by the blank template value on every deploy.
 
-7. Replace `JAMI_PRODUCT_ID` in `wrangler.toml` with the pay-what-you-want product ID. Adjust `DONATION_AMOUNTS` if desired. Amounts are ETB. Set `START_IMAGE_URL` to use your own `/start` image (leave it empty for the bundled sticker).
+7. Adjust `DONATION_AMOUNTS` in `wrangler.toml` if desired. Amounts are ETB. Set `START_IMAGE_URL` to use your own `/start` image (leave it empty for the bundled sticker).
 8. Run locally with `pnpm run dev` or deploy with `pnpm run deploy`.
 9. Register the Telegram webhook after deployment:
 

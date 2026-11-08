@@ -2,7 +2,7 @@
 
 A complete, from-zero deployment guide: Cloudflare login, KV namespace, secrets, deploy, Telegram webhook, and verification. Commands assume you are in the project folder.
 
-The bot runs on Cloudflare Workers. You need one KV namespace (short-lived checkout sessions), one D1 database (users and donations), three Worker secrets, and two plain variables.
+The bot runs on Cloudflare Workers. You need one KV namespace (short-lived checkout sessions), one D1 database (users and donations), four Worker secrets, and a few plain variables.
 
 ## Quick path (TL;DR)
 
@@ -11,11 +11,12 @@ pnpm install
 pnpm exec wrangler login
 pnpm exec wrangler kv namespace create SESSIONS   # copy the id into wrangler.toml
 pnpm exec wrangler d1 create donate-to-me         # copy the database_id into wrangler.toml
-# edit wrangler.toml: KV id + D1 id + JAMI_PRODUCT_ID
+# edit wrangler.toml: KV id + D1 id
 pnpm run db:migrate
 pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN
 pnpm exec wrangler secret put TELEGRAM_WEBHOOK_SECRET
 pnpm exec wrangler secret put JAMI_TOKEN
+pnpm exec wrangler secret put JAMI_PRODUCT_ID
 pnpm run deploy
 # then, with the host from the deploy output:
 curl.exe -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" --data-urlencode "url=https://<HOST>/telegram/webhook" --data-urlencode "secret_token=<SECRET>"
@@ -35,7 +36,7 @@ The steps below explain each command, its output, and how to check it worked.
 | Telegram bot token | [@BotFather](https://t.me/BotFather) → `/newbot` | Secret `TELEGRAM_BOT_TOKEN`                                   |
 | Webhook secret     | You generate a random string                     | Secret `TELEGRAM_WEBHOOK_SECRET` (same value in `setWebhook`) |
 | Jami API token     | JamiDev dashboard → Developer → API Tokens       | Secret `JAMI_TOKEN`                                           |
-| Jami product ID    | JamiDev → create a **pay-what-you-want** product | Var `JAMI_PRODUCT_ID`                                         |
+| Jami product ID    | JamiDev → create a **pay-what-you-want** product | Secret `JAMI_PRODUCT_ID` (survives deploys; never commit it) |
 | Payment webhook secret | Shown once when you create the endpoint (step 7b) | Secret `JAMI_WEBHOOK_SECRET`                              |
 | KV namespace       | Created in step 3                                | `wrangler.toml`                                               |
 | D1 database        | Created in step 3                                | `wrangler.toml`                                               |
@@ -165,7 +166,6 @@ directory = "./public"
 binding = "ASSETS"
 
 [vars]
-JAMI_PRODUCT_ID = "p_xxxxxxxx"          # your pay-what-you-want product
 DONATION_AMOUNTS = "50,100,250,500"     # optional, ETB
 START_IMAGE_URL = ""                    # optional, public image URL for /start
 TELEGRAM_OIDC_CLIENT_ID = ""            # BotFather → Login Widget → Client ID
@@ -179,6 +179,7 @@ crons = ["*/15 * * * *"]
 
 Notes:
 
+- `JAMI_PRODUCT_ID` is **not** in `[vars]` on purpose. Everything under `[vars]` is uploaded on every deploy, so a blank placeholder there replaces the real value and the webhook starts returning `503 Payment setup incomplete`. Set it as a secret (step 5); secrets are never touched by a deploy.
 - `DONATION_AMOUNTS` is a comma-separated list of whole ETB amounts. Invalid entries are ignored; if none survive, the defaults `50,100,250,500` are used.
 - `START_IMAGE_URL` is an optional public image URL used as the `/start` photo. Leave it empty to use the bundled `public/sticker.webp`; Telegram fetches the URL server-side.
 - `WEBHOOK_URL` must be the exact URL you register in step 7 and must end in `/telegram/webhook`. Setting it lets the watchdog restore a webhook that was deleted before the Worker ever saw an update. If omitted, the Worker learns its URL from the first update it receives.
@@ -194,7 +195,10 @@ Secrets are encrypted and never appear in `wrangler.toml`. Run each command and 
 pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN
 pnpm exec wrangler secret put TELEGRAM_WEBHOOK_SECRET
 pnpm exec wrangler secret put JAMI_TOKEN
+pnpm exec wrangler secret put JAMI_PRODUCT_ID
 ```
+
+`JAMI_PRODUCT_ID` is your pay-what-you-want product id. Keep it here rather than in `wrangler.toml`: a `[vars]` entry is overwritten by the blank template value on every `wrangler deploy`, which took the bot offline with a `503` while `/admin` kept working.
 
 `JAMI_WEBHOOK_SECRET` is set in step 7b, after the payment endpoint exists.
 
@@ -475,7 +479,7 @@ pnpm exec wrangler d1 delete donate-to-me
 - A completed donation is missing from `/halloffame` → check `/health` for `databaseConfigured: true`, then run the manual reconcile:
   `curl -X POST "https://<HOST>/admin/reconcile" -H "X-Admin-Secret: <ADMIN_SECRET>"`.
   The 15-minute cron also backfills from KV sessions once the binding is correct.
-- Deploy succeeds but the bot replies "Payment setup incomplete" → `JAMI_PRODUCT_ID` is still `REPLACE_...` or `JAMI_TOKEN` is unset.
+- Deploy succeeds but the bot replies "Payment setup incomplete" (or is silent while `/health` shows `productConfigured: false`) → `JAMI_PRODUCT_ID` is missing. It is a secret: `pnpm exec wrangler secret put JAMI_PRODUCT_ID`, then `pnpm exec wrangler deploy`. `JAMI_TOKEN` may also be unset.
 - `/admin` shows "Dashboard bundle missing" — `public/dashboard/` was not built. Run `pnpm run build:web` or deploy with `pnpm run deploy` (which builds first).
 - `/admin` shows "Dashboard login is not configured" — `TELEGRAM_OIDC_CLIENT_ID`, `ADMIN_TELEGRAM_IDS`, or the OIDC client secret is missing. Repeat step 6b; the login card lists the missing pieces.
 - Telegram says "not an admin" — the signed-in Telegram id is not in `ADMIN_TELEGRAM_IDS`. Use the numeric id (not `@username`), and redeploy after editing.
