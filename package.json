@@ -20,9 +20,6 @@
       "DB": {
         "description": "D1 database for the donation application. Created automatically."
       },
-      "JAMI_PRODUCT_ID": {
-        "description": "Enter your own Jami product ID."
-      },
       "DONATION_AMOUNTS": {
         "description": "Comma-separated donation amounts in ETB."
       },

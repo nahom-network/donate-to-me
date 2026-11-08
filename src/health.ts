@@ -1,6 +1,7 @@
 import type { Env, WebhookInfo } from "./types";
 import {
   BOT_PROFILE_CACHE_KEY,
+  WEBHOOK_ERROR_GRACE_SECONDS,
   WEBHOOK_URL_KEY,
 } from "./constants";
 import { telegram } from "./telegram";
@@ -60,17 +61,19 @@ export async function health(env: Env): Promise<Response> {
   try {
     const info = await telegram<WebhookInfo>(env, "getWebhookInfo", {});
     const desired = await desiredWebhookUrl(env);
+    const pending = info.pending_update_count ?? 0;
+    // Telegram keeps last_error_message after deliveries recover, so only call
+    // it a problem while updates are actually stuck in the queue. If they were
+    // piling up, the message is current even when its timestamp is older.
     const problem = !info.url
       ? "no webhook registered"
       : desired && info.url !== desired
         ? "webhook points at a different URL"
-        : info.last_error_message
+        : pending > 0 && info.last_error_message
           ? `last delivery failed: ${info.last_error_message}`
           : undefined;
     const rateLimited =
-      (info.pending_update_count ?? 0) > 50
-        ? "large backlog of unprocessed updates"
-        : undefined;
+      pending > 50 ? "large backlog of unprocessed updates" : undefined;
     const status = missing.length
       ? "misconfigured"
       : problem || rateLimited
@@ -148,9 +151,11 @@ export async function checkWebhook(
 
   const moved = normalizeUrl(info.url) !== normalizeUrl(desired);
   // A previously failed delivery with 401/403/404 usually means the secret or
-  // URL got out of sync, which re-registering fixes.
+  // URL got out of sync, which re-registering fixes. Only recent failures
+  // count: Telegram keeps the last error after deliveries recover, and
+  // repairing on that stale text would re-register the webhook on every run.
   const rejected = /unauthorized|forbidden|not found|40[134]/i.test(
-    info.last_error_message ?? "",
+    recentWebhookError(info) ?? "",
   );
   if (!moved && !rejected) return { ...summary, repaired: false };
 
@@ -219,4 +224,19 @@ export async function rememberWebhookUrl(
   } catch (error) {
     console.warn("Could not remember webhook URL", errorMessage(error));
   }
+}
+
+/**
+ * The last delivery error, but only while it is recent. Telegram does not clear
+ * `last_error_message` after deliveries start working again, so an unaged error
+ * would make the watchdog re-register the webhook on every cron run.
+ */
+function recentWebhookError(info: WebhookInfo): string | null {
+  const message = info.last_error_message;
+  if (!message) return null;
+  const at = info.last_error_date ?? 0;
+  if (at > 0 && Date.now() / 1000 - at > WEBHOOK_ERROR_GRACE_SECONDS) {
+    return null;
+  }
+  return message;
 }
