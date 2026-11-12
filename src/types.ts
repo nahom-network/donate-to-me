@@ -60,10 +60,25 @@ export type TgCallback = {
   message?: { message_id?: number; chat: TgChat; photo?: unknown };
 };
 
+/**
+ * A tap inside an HTML widget (`TelegramWidget.request`). `from` is
+ * authenticated by Telegram, `data` is untrusted input.
+ */
+export type TgWidgetQuery = {
+  id: string;
+  from: TgUser;
+  data?: string;
+  chat?: TgChat;
+  message_id?: number;
+  chat_instance?: string;
+};
+
 export type TgUpdate = {
   update_id?: number;
   message?: TgMessage;
   callback_query?: TgCallback;
+  /** Only delivered when `widget_query` is in the webhook's allowed_updates. */
+  widget_query?: TgWidgetQuery;
 };
 
 export type ButtonStyle = "primary" | "success" | "danger";

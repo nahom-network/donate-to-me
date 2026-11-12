@@ -174,14 +174,32 @@ export async function checkWebhook(
 async function setWebhook(env: Env, url: string, dropPending: boolean) {
   const body: Record<string, unknown> = {
     url,
-    allowed_updates: ["message", "callback_query"],
     max_connections: 40,
     drop_pending_updates: dropPending,
   };
   if (env.TELEGRAM_WEBHOOK_SECRET) {
     body.secret_token = env.TELEGRAM_WEBHOOK_SECRET;
   }
-  await telegram(env, "setWebhook", body);
+  try {
+    await telegram(env, "setWebhook", {
+      ...body,
+      // widget_query (Bot API 10.4) carries every tap inside the amount
+      // picker; without it in allowed_updates those taps are never delivered.
+      allowed_updates: ["message", "callback_query", "widget_query"],
+    });
+  } catch (error) {
+    // An API deployment that predates widgets rejects the unknown update type.
+    // Losing every update is worse than losing widget taps, so retry without
+    // it and let the inline-keyboard flow carry the donation.
+    console.warn(
+      "setWebhook rejected widget_query; registering the legacy update types",
+      errorMessage(error),
+    );
+    await telegram(env, "setWebhook", {
+      ...body,
+      allowed_updates: ["message", "callback_query"],
+    });
+  }
 }
 
 async function desiredWebhookUrl(env: Env): Promise<string> {

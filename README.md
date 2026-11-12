@@ -13,8 +13,8 @@ The same Worker also serves a private admin dashboard at `/admin`: a React + Vit
 
 ## How a donation works
 
-1. `/donate` — pick an amount from the colored inline buttons.
-2. Pick Telebirr, M-Pesa, or CBE Birr.
+1. `/donate` — pick an amount from the amount picker, an HTML widget (Bot API 10.4). Telegram clients that can't draw widgets, or an API that rejects them, fall back to the colored inline buttons.
+2. Pick Telebirr, M-Pesa, or CBE Birr inside the same picker.
 3. Reply to the bot's prompt with the mobile number registered with that account (the prompt uses ForceReply; spaces and dashes are fine).
    - M-Pesa: a Safaricom number starting with `07` or `+2517` (e.g. `0712345678`).
    - Telebirr and CBE Birr: an Ethio Telecom number starting with `09` or `+2519` (e.g. `0912345678`).
@@ -25,6 +25,8 @@ The same Worker also serves a private admin dashboard at `/admin`: a React + Vit
 5. `/halloffame` shows the top three people by total completed donations, aggregated across all their donations (first names only, no usernames).
 
 Button colors use the `style` field added in Bot API 9.4 (blue = primary, green = success, red = danger). Older Telegram clients simply show their default button color.
+
+The amount picker is a widget: one message with fixed HTML, redrawn from `chat_data` (`amount` → `gateway` → `phone sent`) as the bot answers each tap with `answerWidgetQuery` and pushes the next screen with `editMessageWidgetData`. Widgets have no text input and work only in private chats, so the phone number is still collected by a ForceReply message in the chat. If `sendWidget` fails for any reason, the bot logs it and sends the inline-keyboard version instead.
 
 ## Before running
 

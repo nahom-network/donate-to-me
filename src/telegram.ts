@@ -84,6 +84,69 @@ export async function sendPhoto(
   });
 }
 
+/**
+ * Send a message with an HTML widget (Bot API 10.4). Widgets are private-chat
+ * only in production and arrive with protected content, so they can't be
+ * forwarded. Throws when the API or the HTML is rejected; callers must fall
+ * back to an inline keyboard.
+ */
+export async function sendWidget(
+  env: Env,
+  chatId: number,
+  html: string,
+  options: { caption?: string; chatData?: string; allowQueries?: boolean } = {},
+): Promise<number | undefined> {
+  const result = await telegram<{ message_id: number }>(env, "sendWidget", {
+    chat_id: chatId,
+    html,
+    ...(options.caption ? { caption: options.caption } : {}),
+    ...(options.chatData ? { chat_data: options.chatData } : {}),
+    ...(options.allowQueries ? { allow_queries: true } : {}),
+  });
+  return result?.message_id;
+}
+
+/**
+ * Answer a widget tap. Must arrive within 15 seconds or the widget sees
+ * `TIMEOUT`. The answer carries `data` only; change the widget with
+ * `editMessageWidgetData`.
+ */
+export async function answerWidgetQuery(
+  env: Env,
+  widgetQueryId: string,
+  data?: string,
+): Promise<void> {
+  try {
+    await telegram(env, "answerWidgetQuery", {
+      widget_query_id: widgetQueryId,
+      ...(data ? { data } : {}),
+    });
+  } catch (error) {
+    console.warn("Could not answer widget query", errorMessage(error));
+  }
+}
+
+/**
+ * Push new `chat_data` to a widget. Edits are silent (no "edited" mark), and a
+ * repeated state fails with "message is not modified", which is not an error.
+ */
+export async function editMessageWidgetData(
+  env: Env,
+  chatId: number,
+  messageId: number,
+  chatData: string,
+): Promise<void> {
+  try {
+    await telegram(env, "editMessageWidgetData", {
+      chat_id: chatId,
+      message_id: messageId,
+      chat_data: chatData,
+    });
+  } catch (error) {
+    console.warn("Could not update widget data", errorMessage(error));
+  }
+}
+
 export async function sendMessageGetId(
   env: Env,
   chatId: number,

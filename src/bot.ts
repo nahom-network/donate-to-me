@@ -6,22 +6,27 @@ import type {
   TgCallback,
   TgMessage,
   TgUpdate,
+  TgWidgetQuery,
 } from "./types";
-import {
-  DEFAULT_AMOUNTS,
-  GATEWAYS,
-  PENDING_TTL_SECONDS,
-  type Gateway,
-} from "./constants";
+import { GATEWAYS, PENDING_TTL_SECONDS, parseAmounts, type Gateway } from "./constants";
 import {
   answerCallback,
+  answerWidgetQuery,
   deleteMessage,
   editMessageText,
+  editMessageWidgetData,
   sendChatAction,
   sendMessage,
   sendMessageGetId,
   sendPhoto,
+  sendWidget,
 } from "./telegram";
+import {
+  PICKER_CAPTION,
+  pickerState,
+  renderAmountPicker,
+  type PickerState,
+} from "./widgets";
 import { paymentClient, type CheckoutResult } from "./payment";
 import {
   claimUpdate,
@@ -59,6 +64,9 @@ export async function handleUpdate(
     } else if (update.message) {
       await recordUser(env, update.message.from);
       await onMessage(update.message, env, origin);
+    } else if (update.widget_query) {
+      await recordUser(env, update.widget_query.from);
+      await onWidgetQuery(update.widget_query, env);
     }
   } catch (error) {
     console.error(
@@ -69,7 +77,10 @@ export async function handleUpdate(
       }),
     );
     const chatId =
-      update.callback_query?.message?.chat.id ?? update.message?.chat.id;
+      update.callback_query?.message?.chat.id ??
+      update.message?.chat.id ??
+      update.widget_query?.chat?.id ??
+      update.widget_query?.from.id;
     if (!chatId) return;
     // Never let a failed notification escape: that would make the Worker
     // return 500 and trigger another Telegram retry for the same update.
@@ -137,6 +148,8 @@ async function onMessage(message: TgMessage, env: Env, origin?: string) {
   }
   if (command === "donate") {
     await resetPending(env, chatId, userId);
+    // Widget first; the inline keyboard stays as the fallback.
+    if (await sendAmountPicker(env, chatId)) return;
     return sendMessage(
       env,
       chatId,
@@ -185,11 +198,7 @@ async function onMessage(message: TgMessage, env: Env, origin?: string) {
 }
 
 function amountKeyboard(env: Env) {
-  let amounts = (env.DONATION_AMOUNTS || DEFAULT_AMOUNTS)
-    .split(",")
-    .map((x) => Number(x.trim()))
-    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 100000);
-  if (amounts.length === 0) amounts = DEFAULT_AMOUNTS.split(",").map(Number);
+  const amounts = parseAmounts(env.DONATION_AMOUNTS);
 
   const rows: InlineButton[][] = [];
   for (let i = 0; i < amounts.length; i += 2) {
@@ -266,6 +275,12 @@ async function onCallback(query: TgCallback, env: Env) {
   if (query.data === "donate" || query.data === "back") {
     await resetPending(env, chatId, userId);
     const text = "Choose a donation amount in ETB:";
+    // A widget can't be edited into another widget and has no inline keyboard,
+    // so it replaces the message it came from instead of editing it.
+    if (await sendAmountPicker(env, chatId)) {
+      if (messageId) await deleteMessage(env, chatId, messageId);
+      return;
+    }
     // The start screen is a photo, and editMessageText cannot edit photo
     // messages. Replace it with a fresh text message for the amount list.
     if (query.message?.photo && messageId) {
@@ -343,9 +358,123 @@ async function onCallback(query: TgCallback, env: Env) {
     chatId,
     userId,
     pending,
-    `You chose <b>${gatewayLabel(gateway)}</b> for <b>${formatEtb(amount)}</b>.\n\n` +
-      `Reply with ${phoneHint(gateway)} so the payment request can be sent, e.g. <code>${phoneExample(gateway)}</code>.\n\n` +
-      `<i>Your number is used only to start this payment and isn’t stored by this bot.</i>`,
+    phonePromptText(gateway, amount),
+  );
+}
+
+/**
+ * Send the amount picker as an HTML widget. Returns the message id, or
+ * `undefined` when the API, the client or the HTML refuses it, so the caller
+ * can fall back to the inline keyboard.
+ */
+async function sendAmountPicker(
+  env: Env,
+  chatId: number,
+): Promise<number | undefined> {
+  const amounts = parseAmounts(env.DONATION_AMOUNTS);
+  try {
+    return await sendWidget(env, chatId, renderAmountPicker(amounts), {
+      caption: PICKER_CAPTION,
+      chatData: pickerState({ s: "a" }),
+      allowQueries: true,
+    });
+  } catch (error) {
+    console.warn(
+      "Widget picker rejected, using the inline keyboard",
+      errorMessage(error),
+    );
+    return undefined;
+  }
+}
+
+async function setPickerState(
+  env: Env,
+  chatId: number,
+  messageId: number,
+  state: PickerState,
+): Promise<void> {
+  await editMessageWidgetData(env, chatId, messageId, pickerState(state));
+}
+
+/**
+ * A tap inside the amount picker. Telegram drops a query left unanswered for
+ * 15 seconds, and the widget only learns the new screen from `chat_data`, so
+ * answer first and push the state second. `data` is untrusted: every amount
+ * and gateway is re-validated here.
+ */
+async function onWidgetQuery(query: TgWidgetQuery, env: Env) {
+  const userId = query.from.id;
+  const chatId = query.chat?.id ?? userId;
+  const messageId = query.message_id;
+  const data = query.data ?? "";
+
+  // Donations are private-chat only (the phone step needs a direct chat), and
+  // the message id is the only place this widget's state can be changed.
+  if (!messageId || chatId !== userId) {
+    return answerWidgetQuery(
+      env,
+      query.id,
+      "Open a direct chat with me and send /donate.",
+    );
+  }
+
+  if (data === "cancel") {
+    await answerWidgetQuery(env, query.id, "Cancelled.");
+    await resetPending(env, chatId, userId);
+    await deleteMessage(env, chatId, messageId);
+    return;
+  }
+
+  if (data === "back") {
+    await answerWidgetQuery(env, query.id);
+    // Leaving the gateway step abandons that choice: drop the pending checkout
+    // and its ForceReply so a later phone reply can't pay the old amount.
+    await resetPending(env, chatId, userId);
+    return setPickerState(env, chatId, messageId, { s: "a" });
+  }
+
+  const amountMatch = /^amount:(\d{1,6})$/.exec(data);
+  if (amountMatch) {
+    const amount = Number(amountMatch[1]);
+    if (!parseAmounts(env.DONATION_AMOUNTS).includes(amount)) {
+      await answerWidgetQuery(env, query.id, "That amount isn’t available.");
+      await resetPending(env, chatId, userId);
+      return setPickerState(env, chatId, messageId, { s: "a" });
+    }
+    await answerWidgetQuery(env, query.id);
+    await resetPending(env, chatId, userId);
+    return setPickerState(env, chatId, messageId, { s: "g", a: amount });
+  }
+
+  const gatewayMatch = /^gateway:(\d{1,6}):(telebirr|mpesa|cbe)$/.exec(data);
+  if (!gatewayMatch) {
+    return answerWidgetQuery(env, query.id, "That button is out of date.");
+  }
+
+  const amount = Number(gatewayMatch[1]);
+  const gateway = gatewayMatch[2] as Gateway;
+  if (!parseAmounts(env.DONATION_AMOUNTS).includes(amount)) {
+    await answerWidgetQuery(env, query.id, "That amount isn’t available.");
+    await resetPending(env, chatId, userId);
+    return setPickerState(env, chatId, messageId, { s: "a" });
+  }
+
+  // A widget has no text input, so the phone number is still collected in the
+  // chat: the widget reports that the prompt was sent and the ForceReply below
+  // does the rest, exactly like the inline-keyboard flow.
+  await answerWidgetQuery(env, query.id);
+  await setPickerState(env, chatId, messageId, {
+    s: "p",
+    a: amount,
+    g: gateway,
+  });
+  await resetPending(env, chatId, userId);
+  return promptForPhone(
+    env,
+    chatId,
+    userId,
+    { amount, gateway, createdAt: Date.now() },
+    phonePromptText(gateway, amount),
   );
 }
 
@@ -610,6 +739,15 @@ function phoneHint(gateway: Gateway) {
 
 function phoneExample(gateway: Gateway) {
   return gateway === "mpesa" ? "0712345678" : "0912345678";
+}
+
+/** Copy for the ForceReply prompt, shared by the buttons and widget flows. */
+function phonePromptText(gateway: Gateway, amount: number) {
+  return (
+    `You chose <b>${gatewayLabel(gateway)}</b> for <b>${formatEtb(amount)}</b>.\n\n` +
+    `Reply with ${phoneHint(gateway)} so the payment request can be sent, e.g. <code>${phoneExample(gateway)}</code>.\n\n` +
+    `<i>Your number is used only to start this payment and isn’t stored by this bot.</i>`
+  );
 }
 
 function phonePlaceholder(gateway: Gateway) {

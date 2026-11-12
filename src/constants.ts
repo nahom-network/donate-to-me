@@ -3,6 +3,20 @@ export type Gateway = (typeof GATEWAYS)[number];
 
 export const DEFAULT_AMOUNTS = "50,100,250,500";
 
+/**
+ * Parse `DONATION_AMOUNTS` into the amounts both the inline keyboard and the
+ * widget offer. Falls back to the defaults when nothing usable is configured.
+ */
+export function parseAmounts(raw?: string): number[] {
+  const parsed = (raw || DEFAULT_AMOUNTS)
+    .split(",")
+    .map((value) => Number(value.trim()))
+    .filter((amount) => Number.isInteger(amount) && amount >= 1 && amount <= 100000);
+  return parsed.length
+    ? parsed
+    : DEFAULT_AMOUNTS.split(",").map((value) => Number(value));
+}
+
 export const PENDING_TTL_SECONDS = 15 * 60;
 export const DONATION_SESSION_TTL_MS = 3 * 60 * 60 * 1000;
 export const UPDATE_DEDUPE_TTL_SECONDS = 600;

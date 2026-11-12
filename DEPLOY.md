@@ -365,7 +365,9 @@ A healthy response looks like:
 }
 ```
 
-Then open the bot in Telegram and send `/start`. You should get the amount keyboard. Pick an amount, pick a gateway, then reply to the prompt with the mobile number registered with that account (for example `0912345678`) — the payment provider needs it to send the payment request. Follow the checkout and pay: the bot should message you automatically when the webhook arrives, without sending `/status`. `/halloffame` (also works in groups) shows the top 3 donors once a payment completes.
+Then open the bot in Telegram and send `/start`. You should get the amount picker — an HTML widget whose amount buttons live inside the message. Pick an amount, pick a gateway, then reply to the prompt with the mobile number registered with that account (for example `0912345678`) — the payment provider needs it to send the payment request. Follow the checkout and pay: the bot should message you automatically when the webhook arrives, without sending `/status`. `/halloffame` (also works in groups) shows the top 3 donors once a payment completes.
+
+If the picker arrives as a plain message with colored buttons instead of a card, Telegram refused the widget; the bot logs `Widget picker rejected, using the inline keyboard` and the same flow continues. Widgets need a recent Telegram app and can only be sent in private chats.
 
 If `/health` is not `ok`:
 
