@@ -26,7 +26,7 @@ The same Worker also serves a private admin dashboard at `/admin`: a React + Vit
 
 Button colors use the `style` field added in Bot API 9.4 (blue = primary, green = success, red = danger). Older Telegram clients simply show their default button color.
 
-The amount picker is a widget: one message with fixed HTML, redrawn from `chat_data` (`amount` → `gateway` → `phone sent`) as the bot answers each tap with `answerWidgetQuery` and pushes the next screen with `editMessageWidgetData`. Widgets have no text input and work only in private chats, so the phone number is still collected by a ForceReply message in the chat. If `sendWidget` fails for any reason, the bot logs it and sends the inline-keyboard version instead.
+The amount picker is a widget: one message with fixed HTML, redrawn from `chat_data` (`amount` → `gateway` → `phone sent`) as the bot answers each tap with `answerWidgetQuery` and pushes the next screen with `editMessageWidgetData`. The three payment logos are inlined `data:` PNGs (a widget can't load a URL), so the card draws instantly and never makes a request. Widgets have no text input and work only in private chats, so the phone number is still collected by a ForceReply message in the chat. If `sendWidget` fails for any reason, the bot logs it and sends the inline-keyboard version instead.
 
 ## Before running
 

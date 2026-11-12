@@ -1,8 +1,10 @@
 import type { Gateway } from "./constants";
+import { LOGO_CBE, LOGO_MPESA, LOGO_TELEBIRR } from "./widget-logos";
 
 /** Caption on the amount picker. Older clients that can't draw widgets show
  * this text instead of the buttons, and it is what the chat list shows. */
-export const PICKER_CAPTION = "Choose a donation amount in ETB.";
+export const PICKER_CAPTION =
+  "Choose an amount and pay with Telebirr, M-Pesa or CBE Birr.";
 
 /**
  * `chat_data` of the amount picker. The widget is fixed HTML, so every screen
@@ -19,17 +21,25 @@ export function pickerState(state: PickerState): string {
 }
 
 /**
+ * The payment logos, inlined as `data:` PNGs. They are baked into the HTML at
+ * send time because a widget never loads a network URL, and the whole document
+ * must stay under 4096 bytes after zlib level 9. Regenerate with
+ * `node scripts/build-widget-logos.mjs` after changing `images/`.
+ */
+const LOGOS = { t: LOGO_TELEBIRR, m: LOGO_MPESA, c: LOGO_CBE };
+
+/**
  * The picker widget: one HTML document, no network, no libraries, nothing
  * outside Telegram's widget profile 1.
  *
- * - Amounts are baked in at send time (the HTML never changes afterwards);
- *   everything else is drawn from `chat_data`.
+ * - Amounts and logos are baked in at send time (the HTML never changes
+ *   afterwards); everything else is drawn from `chat_data`.
  * - A tap calls `TelegramWidget.request`, the bot answers and pushes the next
  *   state with `editMessageWidgetData`, and `chatDataChanged` redraws.
- * - Limits: 32768 bytes of HTML and 4096 after zlib level 9 (this is ~2 KB
- *   compressed). No opacity, no blurred shadows, no filters, no `vh`, no form
- *   controls, no external fonts or images: all of those are removed or counted
- *   by the profile.
+ * - Limits: 32768 bytes of HTML and 4096 after zlib level 9. Most of that is
+ *   the three logos, so the CSS is deliberately lean: no opacity, no blurred
+ *   shadows, no filters, no `vh`, no form controls, no external fonts or
+ *   images — the profile removes or counts all of those.
  * - Only `transform`, `background` and `color` animate, so the "heavy
  *   element" budget (16) is never touched, and motion honours
  *   `prefers-reduced-motion`.
@@ -58,15 +68,13 @@ body{margin:0;padding:10px 12px;font-family:system-ui,sans-serif;color:var(--tg-
 .pt{background:var(--tg-theme-button-color);border-color:var(--tg-theme-button-color);color:var(--tg-theme-button-text-color);font-variant-numeric:tabular-nums}
 .cv{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .gw{display:flex;flex-direction:column;gap:7px}
-.g{display:flex;align-items:center;gap:9px;width:100%;margin:0;padding:8px 10px;border:1px solid var(--tg-theme-section-separator-color);border-radius:12px;background:var(--tg-theme-secondary-bg-color);color:var(--tg-theme-text-color);text-align:left;transition:transform .12s ease,background .12s ease}
-.m{width:28px;height:28px;flex:none;border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:.76em;font-weight:700}
-.m1{background:#16a34a}.m2{background:#e11d48}.m3{background:#7c3aed}
-.gl{flex:1;min-width:0}
-.gl b{display:block;font-size:.95em;font-weight:600;line-height:1.25}
-.gl span{display:block;font-size:.73em;line-height:1.25;color:var(--tg-theme-hint-color)}
+.g{display:flex;align-items:center;gap:10px;width:100%;margin:0;padding:7px 10px;border:1px solid var(--tg-theme-section-separator-color);border-radius:12px;background:var(--tg-theme-secondary-bg-color);color:var(--tg-theme-text-color);text-align:left;transition:transform .12s ease,background .12s ease}
+.lg{width:28px;height:28px;flex:none;border-radius:8px;object-fit:contain;box-sizing:border-box}
+.lg-t{background:#fff;padding:3px}
+.gn{flex:1;min-width:0;font-size:.96em;font-weight:600}
 .dn{display:flex;justify-content:center;padding:7px 0 2px;color:var(--tg-theme-button-color)}
 .dn svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.rr{display:flex;gap:7px;margin:0}
+.rr{display:flex;gap:7px;margin:10px 0 0}
 .rr button{flex:1;margin:0;padding:8px 2px;border:1px solid var(--tg-theme-section-separator-color);border-radius:10px;background:transparent;color:var(--tg-theme-link-color);font-size:.84em;font-weight:500}
 .nt{margin:9px 0 0;font-size:.75em;line-height:1.35;color:var(--tg-theme-hint-color)}
 .er{color:var(--tg-theme-destructive-text-color);font-weight:500}
@@ -76,8 +84,8 @@ body{margin:0;padding:10px 12px;font-family:system-ui,sans-serif;color:var(--tg-
 </style>
 <div id="w"></div>
 <script>
-var W=window.TelegramWidget,D=__DATA__,root=document.getElementById("w"),busy=false,note="";
-var G=[["telebirr","Telebirr","T","m1","Ethio Telecom"],["mpesa","M-Pesa","M","m2","Safaricom"],["cbe","CBE Birr","C","m3","Commercial Bank"]];
+var W=window.TelegramWidget,D=__DATA__,L=__LOGOS__,root=document.getElementById("w"),busy=false,note="";
+var G=[["telebirr","Telebirr","t"],["mpesa","M-Pesa","m"],["cbe","CBE Birr","c"]];
 function st(){if(!W)return{};try{return JSON.parse(W.chatData||"{}")||{}}catch(e){return{}}}
 function fmt(n){return String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g,",")}
 function nm(g){for(var i=0;i<G.length;i++)if(G[i][0]===g)return G[i];return null}
@@ -99,18 +107,19 @@ function steps(n){
 function scrA(){
   var h='<div class="ag">',i;
   for(i=0;i<D.a.length;i++)h+='<button class="a" data-x="amount:'+D.a[i]+'"'+dis()+"><b>"+fmt(D.a[i])+'</b><i>ETB</i></button>';
-  return h+'</div><p class="nt">Secure checkout with Telebirr, M-Pesa or CBE Birr.</p>';
+  return h+"</div>";
 }
 function scrG(a){
   var h='<div class="rw"><button class="bk" data-x="back"'+dis()+'><svg class="cv" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>Back</button><span class="pt">'+fmt(a)+' ETB</span></div><div class="gw">',i;
-  for(i=0;i<G.length;i++)h+='<button class="g" data-x="gateway:'+a+":"+G[i][0]+'"'+dis()+'><span class="m '+G[i][3]+'">'+G[i][2]+'</span><span class="gl"><b>'+G[i][1]+'</b><span>'+G[i][4]+'</span></span><svg class="cv" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>';
-  return h+'</div><p class="nt">Your number is used only to start this payment and is not stored.</p>';
+  for(i=0;i<G.length;i++)h+='<button class="g" data-x="gateway:'+a+":"+G[i][0]+'"'+dis()+'><img class="lg lg-'+G[i][2]+'" src="'+L[G[i][2]]+'"><b class="gn">'+G[i][1]+'</b><svg class="cv" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>';
+  return h+"</div>";
 }
 function scrP(a,g){
   var m=nm(g),label=m?m[1]:g;
   return '<div class="rw"><span class="pt">'+fmt(a)+' ETB</span><span class="t2" style="margin:0">'+esc(label)+'</span></div>'
     +'<p class="t2" style="margin:0">Reply in the chat below with the mobile number registered with your '+esc(label)+' account.</p>'
     +'<div class="dn"><svg viewBox="0 0 24 24"><path d="M12 4v13M6.5 12l5.5 5.5L17.5 12"/></svg></div>'
+    +'<p class="nt">The number is only used to start this payment and is not stored.</p>'
     +'<div class="rr"><button data-x="back"'+dis()+'>Change amount</button><button data-x="cancel"'+dis()+'>Cancel</button></div>';
 }
 function render(){
@@ -124,10 +133,10 @@ function render(){
 }
 function fail(c){
   if(c==="BUSY")return"";
-  if(c==="RATE_LIMITED")return"Too many taps — wait a moment and try again.";
-  if(c==="NOT_ALLOWED")return"This message is out of date. Send /donate for a new one.";
-  if(c==="TIMEOUT")return"The bot did not answer. Try again.";
-  if(c==="INVALID_ANSWER")return"Telegram could not read the bot's answer.";
+  if(c==="RATE_LIMITED")return"Too many taps. Try again.";
+  if(c==="NOT_ALLOWED")return"This card is out of date. Send /donate.";
+  if(c==="TIMEOUT")return"No answer from the bot. Try again.";
+  if(c==="INVALID_ANSWER")return"That answer was invalid.";
   return"Something went wrong. Try again.";
 }
 function ask(x){
@@ -147,7 +156,6 @@ root.addEventListener("click",function(ev){
 });
 if(W&&W.onEvent){
   W.onEvent("chatDataChanged",function(){busy=false;note="";render()});
-  W.onEvent("publicDataChanged",function(){render()});
 }
 render();
 if(W&&W.ready)W.ready();
@@ -155,5 +163,8 @@ if(W&&W.ready)W.ready();
 
 /** Build the picker for the configured amounts. */
 export function renderAmountPicker(amounts: number[]): string {
-  return PICKER_HTML.replace("__DATA__", JSON.stringify({ a: amounts }));
+  return PICKER_HTML.replace("__DATA__", JSON.stringify({ a: amounts })).replace(
+    "__LOGOS__",
+    JSON.stringify(LOGOS),
+  );
 }
