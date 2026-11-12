@@ -35,6 +35,7 @@ import {
   deleteCheckoutMessage,
   getPending,
   pendingKey,
+  readPending,
   sessionKey,
 } from "./session";
 import {
@@ -424,8 +425,10 @@ async function onWidgetQuery(query: TgWidgetQuery, env: Env) {
 
   if (data === "cancel") {
     await answerWidgetQuery(env, query.id, "Cancelled.");
-    await resetPending(env, chatId, userId);
-    await deleteMessage(env, chatId, messageId);
+    const removed = await resetPending(env, chatId, userId);
+    if (!removed.includes(messageId)) {
+      await deleteMessage(env, chatId, messageId);
+    }
     return;
   }
 
@@ -433,7 +436,7 @@ async function onWidgetQuery(query: TgWidgetQuery, env: Env) {
     await answerWidgetQuery(env, query.id);
     // Leaving the gateway step abandons that choice: drop the pending checkout
     // and its ForceReply so a later phone reply can't pay the old amount.
-    await resetPending(env, chatId, userId);
+    await resetPending(env, chatId, userId, messageId);
     return setPickerState(env, chatId, messageId, { s: "a" });
   }
 
@@ -442,11 +445,11 @@ async function onWidgetQuery(query: TgWidgetQuery, env: Env) {
     const amount = Number(amountMatch[1]);
     if (!parseAmounts(env.DONATION_AMOUNTS).includes(amount)) {
       await answerWidgetQuery(env, query.id, "That amount isn’t available.");
-      await resetPending(env, chatId, userId);
+      await resetPending(env, chatId, userId, messageId);
       return setPickerState(env, chatId, messageId, { s: "a" });
     }
     await answerWidgetQuery(env, query.id);
-    await resetPending(env, chatId, userId);
+    await resetPending(env, chatId, userId, messageId);
     return setPickerState(env, chatId, messageId, { s: "g", a: amount });
   }
 
@@ -459,7 +462,7 @@ async function onWidgetQuery(query: TgWidgetQuery, env: Env) {
   const gateway = gatewayMatch[2] as Gateway;
   if (!parseAmounts(env.DONATION_AMOUNTS).includes(amount)) {
     await answerWidgetQuery(env, query.id, "That amount isn’t available.");
-    await resetPending(env, chatId, userId);
+    await resetPending(env, chatId, userId, messageId);
     return setPickerState(env, chatId, messageId, { s: "a" });
   }
 
@@ -467,19 +470,17 @@ async function onWidgetQuery(query: TgWidgetQuery, env: Env) {
   // chat: the widget reports that the prompt was sent and the ForceReply below
   // does the rest, exactly like the inline-keyboard flow.
   await answerWidgetQuery(env, query.id);
-  await setPickerState(env, chatId, messageId, {
-    s: "p",
-    a: amount,
-    g: gateway,
-  });
-  await resetPending(env, chatId, userId);
-  return promptForPhone(
+  await resetPending(env, chatId, userId, messageId);
+  // Send the prompt before showing the "reply below" screen: the card's Cancel
+  // button must never be visible while there is nothing to cancel.
+  await promptForPhone(
     env,
     chatId,
     userId,
     { amount, gateway, createdAt: Date.now(), widgetMessageId: messageId },
     phonePromptText(gateway, amount),
   );
+  return setPickerState(env, chatId, messageId, { s: "p", a: amount, g: gateway });
 }
 
 async function handleContact(message: TgMessage, env: Env) {
@@ -687,18 +688,27 @@ async function completeCheckout(
   }
 }
 
-/** Drop any pending gateway choice and its ForceReply prompt. */
+/**
+ * Drop any pending gateway choice along with the two messages it owns: the
+ * ForceReply phone prompt and the amount-picker card. Returns the message ids
+ * that were deleted, so a caller holding another id can avoid deleting twice.
+ * `keepMessageId` protects a card that is being redrawn instead of discarded.
+ */
 async function resetPending(
   env: Env,
   chatId: number,
   userId: number | undefined,
-) {
-  if (!userId) return;
-  const pending = await getPending(env, userId);
-  if (pending?.promptMessageId) {
-    await deleteMessage(env, chatId, pending.promptMessageId);
+  keepMessageId?: number,
+): Promise<number[]> {
+  if (!userId) return [];
+  const pending = await readPending(env, userId);
+  const deleted: number[] = [];
+  for (const id of [pending?.promptMessageId, pending?.widgetMessageId]) {
+    if (!id || id === keepMessageId) continue;
+    if (await deleteMessage(env, chatId, id)) deleted.push(id);
   }
   await clearPending(env, userId);
+  return deleted;
 }
 
 async function cancelDonation(
@@ -707,8 +717,8 @@ async function cancelDonation(
   userId: number | undefined,
   messageId?: number,
 ) {
-  await resetPending(env, chatId, userId);
-  if (messageId) {
+  const removed = await resetPending(env, chatId, userId);
+  if (messageId && !removed.includes(messageId)) {
     return editMessageText(
       env,
       chatId,

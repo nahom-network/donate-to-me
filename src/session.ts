@@ -77,27 +77,38 @@ export async function updateCheckoutMessage(
   }
 }
 
-export async function getPending(
+/**
+ * Raw pending checkout, without the TTL and shape checks that `getPending`
+ * applies. Cleanup needs this: a stale prompt still has to be deleted.
+ */
+export async function readPending(
   env: Env,
   userId: number,
 ): Promise<PendingCheckout | null> {
   try {
     const raw = await env.SESSIONS.get(pendingKey(userId));
     if (!raw) return null;
-    const pending = JSON.parse(raw) as PendingCheckout;
-    if (
-      !pending ||
-      typeof pending.amount !== "number" ||
-      typeof pending.createdAt !== "number" ||
-      !GATEWAYS.includes(pending.gateway)
-    ) {
-      return null;
-    }
-    if (Date.now() - pending.createdAt > PENDING_TTL_SECONDS * 1000) return null;
-    return pending;
+    return JSON.parse(raw) as PendingCheckout;
   } catch {
     return null;
   }
+}
+
+export async function getPending(
+  env: Env,
+  userId: number,
+): Promise<PendingCheckout | null> {
+  const pending = await readPending(env, userId);
+  if (
+    !pending ||
+    typeof pending.amount !== "number" ||
+    typeof pending.createdAt !== "number" ||
+    !GATEWAYS.includes(pending.gateway)
+  ) {
+    return null;
+  }
+  if (Date.now() - pending.createdAt > PENDING_TTL_SECONDS * 1000) return null;
+  return pending;
 }
 
 export async function clearPending(env: Env, userId: number): Promise<void> {
