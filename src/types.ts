@@ -121,4 +121,6 @@ export type WebhookInfo = {
   last_error_date?: number;
   last_error_message?: string;
   max_connections?: number;
+  /** Update types Telegram will deliver. Empty or absent means all of them. */
+  allowed_updates?: string[];
 };

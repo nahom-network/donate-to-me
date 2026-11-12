@@ -41,6 +41,22 @@ export async function ensureBotProfile(env: Env): Promise<void> {
   }
 }
 
+/** Update types the bot needs. Widget taps arrive as `widget_query`. */
+const REQUIRED_UPDATE_TYPES = [
+  "message",
+  "callback_query",
+  "widget_query",
+] as const;
+
+/**
+ * Update types the registered webhook is missing. Telegram returns an empty
+ * (or absent) list when it delivers everything, which is fine.
+ */
+function missingUpdateTypes(allowed: string[] | undefined): string[] {
+  if (!allowed || allowed.length === 0) return [];
+  return REQUIRED_UPDATE_TYPES.filter((type) => !allowed.includes(type));
+}
+
 export async function health(env: Env): Promise<Response> {
   const required = {
     webhookSecretConfigured: Boolean(env.TELEGRAM_WEBHOOK_SECRET),
@@ -62,6 +78,7 @@ export async function health(env: Env): Promise<Response> {
     const info = await telegram<WebhookInfo>(env, "getWebhookInfo", {});
     const desired = await desiredWebhookUrl(env);
     const pending = info.pending_update_count ?? 0;
+    const staleUpdates = missingUpdateTypes(info.allowed_updates);
     // Telegram keeps last_error_message after deliveries recover, so only call
     // it a problem while updates are actually stuck in the queue. If they were
     // piling up, the message is current even when its timestamp is older.
@@ -69,9 +86,11 @@ export async function health(env: Env): Promise<Response> {
       ? "no webhook registered"
       : desired && info.url !== desired
         ? "webhook points at a different URL"
-        : pending > 0 && info.last_error_message
-          ? `last delivery failed: ${info.last_error_message}`
-          : undefined;
+        : staleUpdates.length
+          ? `webhook is missing update types: ${staleUpdates.join(", ")}`
+          : pending > 0 && info.last_error_message
+            ? `last delivery failed: ${info.last_error_message}`
+            : undefined;
     const rateLimited =
       pending > 50 ? "large backlog of unprocessed updates" : undefined;
     const status = missing.length
@@ -89,6 +108,7 @@ export async function health(env: Env): Promise<Response> {
         url: info.url,
         expectedUrl: desired || null,
         pendingUpdateCount: info.pending_update_count,
+        allowedUpdates: info.allowed_updates ?? null,
         lastErrorDate: info.last_error_date ?? null,
         lastErrorMessage: info.last_error_message ?? null,
       },
@@ -136,6 +156,7 @@ export async function checkWebhook(
     registeredUrl: info.url,
     expectedUrl: desired || null,
     pendingUpdateCount: info.pending_update_count,
+    allowedUpdates: info.allowed_updates ?? null,
     lastErrorDate: info.last_error_date ?? null,
     lastErrorMessage: info.last_error_message ?? null,
   };
@@ -157,7 +178,14 @@ export async function checkWebhook(
   const rejected = /unauthorized|forbidden|not found|40[134]/i.test(
     recentWebhookError(info) ?? "",
   );
-  if (!moved && !rejected) return { ...summary, repaired: false };
+  // A webhook registered before a newer update type existed keeps delivering
+  // only the old types, so widget taps would never reach the Worker. Repair it
+  // like a moved webhook instead of waiting for a delivery error that never
+  // comes.
+  const staleUpdates = missingUpdateTypes(info.allowed_updates);
+  if (!moved && !rejected && staleUpdates.length === 0) {
+    return { ...summary, repaired: false };
+  }
 
   await setWebhook(env, desired, options.dropPending ?? false);
   console.log(
@@ -166,6 +194,7 @@ export async function checkWebhook(
       from: info.url,
       to: desired,
       lastError: info.last_error_message ?? null,
+      missingUpdates: staleUpdates,
     }),
   );
   return { ...summary, registeredUrl: desired, repaired: true };
