@@ -24,6 +24,8 @@ export const WEBHOOK_EVENT_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export const WEBHOOK_URL_KEY = "tg:webhook-url";
 export const BOT_PROFILE_CACHE_KEY = "tg:bot-profile:v2";
+/** Bot username for `t.me` deep links, refreshed daily. */
+export const BOT_USERNAME_KEY = "tg:bot-username";
 
 export const TELEGRAM_TIMEOUT_MS = 8_000;
 export const PAYMENT_TIMEOUT_MS = 15_000;

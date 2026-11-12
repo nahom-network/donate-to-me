@@ -88,6 +88,8 @@ export type InlineButton = {
   callback_data?: string;
   url?: string;
   style?: ButtonStyle;
+  /** Copies the text to the clipboard when tapped (Bot API 7.11). */
+  copy_text?: { text: string };
 };
 
 export type Session = {

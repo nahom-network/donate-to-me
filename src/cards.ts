@@ -9,6 +9,7 @@ import {
   LOGO_TELEBIRR,
 } from "./widget-images";
 import { errorMessage, escapeHtml, formatEtb, gatewayLabel } from "./util";
+import { botUsername } from "./health";
 
 /**
  * Two static widgets shown after the picker: the settlement card and the Hall
@@ -171,14 +172,65 @@ export async function sendHallOfFame(
   chatId: number,
 ): Promise<void> {
   const rows = await getHallOfFame(env, 3);
+  const keyboard = await fameKeyboard(env, rows);
+  const options = {
+    caption: FAME_CAPTION,
+    ...(keyboard ? { replyMarkup: keyboard } : {}),
+  };
   try {
-    await sendWidget(env, chatId, renderHallOfFame(rows), {
-      caption: FAME_CAPTION,
-    });
+    await sendWidget(env, chatId, renderHallOfFame(rows), options);
   } catch (error) {
-    console.warn("Hall of Fame widget rejected, using text", errorMessage(error));
-    await sendMessage(env, chatId, hallOfFameText(rows));
+    console.warn(
+      "Hall of Fame widget rejected, using text",
+      errorMessage(error),
+    );
+    await sendMessage(env, chatId, hallOfFameText(rows), keyboard);
   }
+}
+
+/**
+ * A widget message can't be forwarded: in production Telegram sends every
+ * widget with protected content and only allows widgets in private chats. So
+ * "share" means a deep link that makes the bot send a fresh podium in the
+ * recipient's own chat, plus a copyable text version for channels.
+ */
+async function fameKeyboard(
+  env: Env,
+  rows: HallOfFameRow[],
+): Promise<unknown | undefined> {
+  const username = await botUsername(env);
+  if (!username) return undefined;
+  const link = `https://t.me/${username}?start=fame`;
+  const share = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(
+    "I support this project — see who else does 👇",
+  )}`;
+  return {
+    inline_keyboard: [
+      [
+        { text: "Share 🏆", url: share, style: "primary" },
+        {
+          text: "Copy top 3",
+          copy_text: { text: hallOfFameShareText(rows) },
+          style: "success",
+        },
+      ],
+    ],
+  };
+}
+
+/** Plain-text podium for the copy button; must stay under 256 characters. */
+export function hallOfFameShareText(rows: HallOfFameRow[]): string {
+  const lines = ["🏆 Hall of Fame — top supporters of this project"];
+  if (rows.length === 0) {
+    lines.push("No donations yet — be the first!");
+  } else {
+    const medals = ["🥇", "🥈", "🥉"];
+    rows.forEach((row, index) => {
+      const name = (row.firstName || "Anonymous").slice(0, 24);
+      lines.push(`${medals[index]} ${name} · ${formatEtb(row.totalMinor / 100)}`);
+    });
+  }
+  return lines.join("\n").slice(0, 256);
 }
 
 /** Plain-text Hall of Fame, used when widgets are unavailable. */

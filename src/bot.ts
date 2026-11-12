@@ -128,6 +128,10 @@ async function onMessage(message: TgMessage, env: Env, origin?: string) {
 
   if (command === "start") {
     await resetPending(env, chatId, userId);
+    // A shared Hall of Fame link lands here as /start fame.
+    if (startPayload(messageText) === "fame") {
+      return showHallOfFame(chatId, env);
+    }
     const caption =
       `Selam${name}! 👋\n\n` +
       `This bot lets you support me with a secure donation via Telebirr, M-Pesa, or CBE Birr.\n\n` +
@@ -910,6 +914,12 @@ function isHallOfFameCommand(command: string | undefined) {
   return (
     command === "halloffame" || command === "top" || command === "topdonors"
   );
+}
+
+/** First word of a `/start` deep link payload, lowercased. */
+function startPayload(messageText: string): string | undefined {
+  const payload = messageText.trim().split(/\s+/)[1];
+  return payload ? payload.toLowerCase() : undefined;
 }
 
 async function showHallOfFame(chatId: number, env: Env) {

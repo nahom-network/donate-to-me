@@ -94,7 +94,12 @@ export async function sendWidget(
   env: Env,
   chatId: number,
   html: string,
-  options: { caption?: string; chatData?: string; allowQueries?: boolean } = {},
+  options: {
+    caption?: string;
+    chatData?: string;
+    allowQueries?: boolean;
+    replyMarkup?: unknown;
+  } = {},
 ): Promise<number | undefined> {
   const result = await telegram<{ message_id: number }>(env, "sendWidget", {
     chat_id: chatId,
@@ -102,6 +107,7 @@ export async function sendWidget(
     ...(options.caption ? { caption: options.caption } : {}),
     ...(options.chatData ? { chat_data: options.chatData } : {}),
     ...(options.allowQueries ? { allow_queries: true } : {}),
+    ...(options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
   });
   return result?.message_id;
 }

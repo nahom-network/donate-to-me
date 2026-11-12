@@ -1,6 +1,7 @@
 import type { Env, WebhookInfo } from "./types";
 import {
   BOT_PROFILE_CACHE_KEY,
+  BOT_USERNAME_KEY,
   WEBHOOK_ERROR_GRACE_SECONDS,
   WEBHOOK_URL_KEY,
 } from "./constants";
@@ -55,6 +56,36 @@ const REQUIRED_UPDATE_TYPES = [
 function missingUpdateTypes(allowed: string[] | undefined): string[] {
   if (!allowed || allowed.length === 0) return [];
   return REQUIRED_UPDATE_TYPES.filter((type) => !allowed.includes(type));
+}
+
+/**
+ * The bot's @username, used to build `t.me` deep links. Cached for a day; an
+ * empty string means the lookup failed and callers should skip the link.
+ */
+export async function botUsername(env: Env): Promise<string> {
+  try {
+    const cached = await env.SESSIONS.get(BOT_USERNAME_KEY);
+    if (cached) return cached;
+  } catch {
+    /* fall through to the API */
+  }
+  try {
+    const me = await telegram<{ username?: string }>(env, "getMe", {});
+    const username = (me?.username ?? "").replace(/^@/, "").trim();
+    if (username) {
+      try {
+        await env.SESSIONS.put(BOT_USERNAME_KEY, username, {
+          expirationTtl: 86400,
+        });
+      } catch {
+        /* not fatal: it just does one more getMe later */
+      }
+    }
+    return username;
+  } catch (error) {
+    console.warn("Could not read the bot username", errorMessage(error));
+    return "";
+  }
 }
 
 export async function health(env: Env): Promise<Response> {
