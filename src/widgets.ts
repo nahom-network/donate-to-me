@@ -1,5 +1,10 @@
 import type { Gateway } from "./constants";
-import { LOGO_CBE, LOGO_MPESA, LOGO_TELEBIRR } from "./widget-logos";
+import {
+  BRAND_IMAGE,
+  LOGO_CBE,
+  LOGO_MPESA,
+  LOGO_TELEBIRR,
+} from "./widget-images";
 
 /** Caption on the amount picker. Older clients that can't draw widgets show
  * this text instead of the buttons, and it is what the chat list shows. */
@@ -21,12 +26,13 @@ export function pickerState(state: PickerState): string {
 }
 
 /**
- * The payment logos, inlined as `data:` PNGs. They are baked into the HTML at
- * send time because a widget never loads a network URL, and the whole document
- * must stay under 4096 bytes after zlib level 9. Regenerate with
- * `node scripts/build-widget-logos.mjs` after changing `images/`.
+ * The payment logos and the badge illustration, inlined as `data:` PNGs. They
+ * are baked into the HTML at send time because a widget never loads a network
+ * URL, and the whole document must stay under 4096 bytes after zlib level 9.
+ * Regenerate with `node scripts/build-widget-images.mjs` after changing
+ * `images/`.
  */
-const LOGOS = { t: LOGO_TELEBIRR, m: LOGO_MPESA, c: LOGO_CBE };
+const LOGOS = { t: LOGO_TELEBIRR, m: LOGO_MPESA, c: LOGO_CBE, b: BRAND_IMAGE };
 
 /**
  * The picker widget: one HTML document, no network, no libraries, nothing
@@ -47,8 +53,7 @@ const LOGOS = { t: LOGO_TELEBIRR, m: LOGO_MPESA, c: LOGO_CBE };
 const PICKER_HTML = `<style>
 body{margin:0;padding:10px 12px;font-family:system-ui,sans-serif;color:var(--tg-theme-text-color)}
 .hd{display:flex;align-items:center;gap:9px;margin:0 0 10px}
-.bg{width:34px;height:34px;flex:none;border-radius:11px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#6366f1,#a855f7)}
-.bg svg{width:18px;height:18px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.bd{width:34px;height:34px;flex:none;border-radius:11px;object-fit:contain;background:#fff}
 .t1{margin:0;font-size:1.02em;font-weight:600;line-height:1.25}
 .t2{margin:1px 0 0;font-size:.79em;line-height:1.25;color:var(--tg-theme-hint-color)}
 .sr{display:flex;align-items:center;gap:5px;margin:0 0 11px}
@@ -94,7 +99,7 @@ function dis(){return busy?" disabled":""}
 function buzz(fn){try{if(W&&W.HapticFeedback)W.HapticFeedback[fn]()}catch(e){}}
 function head(sub){
   var v=W&&W.viewer,name=v&&v.first_name?("Selam, "+esc(v.first_name)):"Support the project";
-  return '<div class="hd"><div class="bg"><svg viewBox="0 0 24 24"><path d="M12 20.4S4 15.6 4 10.3A4.5 4.5 0 0 1 12 7.1a4.5 4.5 0 0 1 8 3.2c0 5.3-8 10.1-8 10.1z"/></svg></div><div><p class="t1">'+name+'</p><p class="t2">'+sub+'</p></div></div>';
+  return '<div class="hd"><img class="bd" src="'+L.b+'"><div><p class="t1">'+name+'</p><p class="t2">'+sub+'</p></div></div>';
 }
 function steps(n){
   var h='<div class="sr">',i;
