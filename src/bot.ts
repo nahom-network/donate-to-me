@@ -425,10 +425,9 @@ async function onWidgetQuery(query: TgWidgetQuery, env: Env) {
 
   if (data === "cancel") {
     await answerWidgetQuery(env, query.id, "Cancelled.");
-    const removed = await resetPending(env, chatId, userId);
-    if (!removed.includes(messageId)) {
-      await deleteMessage(env, chatId, messageId);
-    }
+    // The card stays and turns into its cancelled screen; only the phone
+    // prompt is removed.
+    await cancelPending(env, chatId, userId, messageId);
     return;
   }
 
@@ -711,14 +710,41 @@ async function resetPending(
   return deleted;
 }
 
+/**
+ * Abandon the checkout: delete the ForceReply phone prompt, turn the picker
+ * card into its cancelled screen and clear the pending state. Returns the id of
+ * the card that was updated, if any, so callers don't add a second "Cancelled"
+ * message next to it.
+ */
+async function cancelPending(
+  env: Env,
+  chatId: number,
+  userId: number | undefined,
+  cardId?: number,
+): Promise<number | undefined> {
+  if (!userId) return undefined;
+  const pending = await readPending(env, userId);
+  if (pending?.promptMessageId) {
+    await deleteMessage(env, chatId, pending.promptMessageId);
+  }
+  await clearPending(env, userId);
+
+  const target = cardId ?? pending?.widgetMessageId;
+  if (!target) return undefined;
+  await setPickerState(env, chatId, target, { s: "c" });
+  return target;
+}
+
 async function cancelDonation(
   env: Env,
   chatId: number,
   userId: number | undefined,
   messageId?: number,
 ) {
-  const removed = await resetPending(env, chatId, userId);
-  if (messageId && !removed.includes(messageId)) {
+  const card = await cancelPending(env, chatId, userId);
+  // The card says "Cancelled" now; only clean up the button that started this
+  // when it is a different message (the inline-keyboard flow has no card).
+  if (messageId && messageId !== card) {
     return editMessageText(
       env,
       chatId,
@@ -727,6 +753,7 @@ async function cancelDonation(
       { inline_keyboard: [] },
     );
   }
+  if (card) return;
   return sendMessage(
     env,
     chatId,

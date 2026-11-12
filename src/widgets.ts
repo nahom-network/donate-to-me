@@ -19,7 +19,8 @@ export const PICKER_CAPTION =
 export type PickerState =
   | { s: "a" }
   | { s: "g"; a: number }
-  | { s: "p"; a: number; g: Gateway };
+  | { s: "p"; a: number; g: Gateway }
+  | { s: "c" };
 
 export function pickerState(state: PickerState): string {
   return JSON.stringify(state);
@@ -53,13 +54,12 @@ const LOGOS = { t: LOGO_TELEBIRR, m: LOGO_MPESA, c: LOGO_CBE, b: BRAND_IMAGE };
 const PICKER_HTML = `<style>
 body{margin:0;padding:10px 12px;font-family:system-ui,sans-serif;color:var(--tg-theme-text-color)}
 .hd{display:flex;align-items:center;gap:9px;margin:0 0 10px}
-.bd{width:34px;height:34px;flex:none;border-radius:11px;object-fit:contain;background:#fff}
+.bd{width:30px;height:30px;flex:none;border-radius:9px;object-fit:contain;background:#fff}
 .t1{margin:0;font-size:1.02em;font-weight:600;line-height:1.25}
 .t2{margin:1px 0 0;font-size:.79em;line-height:1.25;color:var(--tg-theme-hint-color)}
 .sr{display:flex;align-items:center;gap:5px;margin:0 0 11px}
 .s{width:18px;height:18px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.66em;font-weight:700;background:var(--tg-theme-secondary-bg-color);color:var(--tg-theme-hint-color)}
 .s.on{background:var(--tg-theme-button-color);color:var(--tg-theme-button-text-color)}
-.s.dn{color:var(--tg-theme-text-color)}
 .l{flex:1;height:2px;border-radius:2px;background:var(--tg-theme-section-separator-color)}
 .l.dn{background:var(--tg-theme-button-color)}
 .ag{display:grid;grid-template-columns:1fr 1fr;gap:7px}
@@ -92,7 +92,7 @@ body{margin:0;padding:10px 12px;font-family:system-ui,sans-serif;color:var(--tg-
 var W=window.TelegramWidget,D=__DATA__,L=__LOGOS__,root=document.getElementById("w"),busy=false,note="";
 var G=[["telebirr","Telebirr","t"],["mpesa","M-Pesa","m"],["cbe","CBE Birr","c"]];
 function st(){if(!W)return{};try{return JSON.parse(W.chatData||"{}")||{}}catch(e){return{}}}
-function fmt(n){return String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g,",")}
+function fmt(n){return n.toLocaleString("en-US")}
 function nm(g){for(var i=0;i<G.length;i++)if(G[i][0]===g)return G[i];return null}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function dis(){return busy?" disabled":""}
@@ -105,7 +105,7 @@ function steps(n){
   var h='<div class="sr">',i;
   for(i=1;i<=3;i++){
     if(i>1)h+='<span class="l'+(i<=n?" dn":"")+'"></span>';
-    h+='<span class="s'+(i===n?" on":(i<n?" dn":""))+'">'+i+"</span>";
+    h+='<span class="s'+(i===n?" on":"")+'">'+i+"</span>";
   }
   return h+"</div>";
 }
@@ -124,25 +124,30 @@ function scrP(a,g){
   return '<div class="rw"><span class="pt">'+fmt(a)+' ETB</span><span class="t2" style="margin:0">'+esc(label)+'</span></div>'
     +'<p class="t2" style="margin:0">Reply in the chat below with the mobile number registered with your '+esc(label)+' account.</p>'
     +'<div class="dn"><svg viewBox="0 0 24 24"><path d="M12 4v13M6.5 12l5.5 5.5L17.5 12"/></svg></div>'
-    +'<p class="nt">The number is only used to start this payment and is not stored.</p>'
+    +'<p class="nt">Used only to start this payment. Not stored.</p>'
     +'<div class="rr"><button data-x="back"'+dis()+'>Change amount</button><button data-x="cancel"'+dis()+'>Cancel</button></div>';
 }
+function scrC(){
+  return '<p class="nt">Nothing was charged. You can start again whenever you like.</p>'
+    +'<div class="rr"><button data-x="back"'+dis()+'>Start again</button></div>';
+}
 function render(){
-  var s=st(),n=1,sub="Choose an amount · ETB",body;
+  var s=st(),h,n=1,sub="Choose an amount · ETB",body;
   if(s.s==="g"&&s.a){n=2;sub="How would you like to pay?";body=scrG(s.a)}
   else if(s.s==="p"&&s.a){n=3;sub="One more step";body=scrP(s.a,s.g)}
+  else if(s.s==="c"){sub="Cancelled";body=scrC()}
   else body=scrA();
-  var h=head(sub)+steps(n)+body;
+  h=head(sub)+(s.s==="c"?"":steps(n))+body;
   if(note)h+='<p class="nt er">'+note+"</p>";
   root.innerHTML=h;
 }
 function fail(c){
   if(c==="BUSY")return"";
-  if(c==="RATE_LIMITED")return"Too many taps. Try again.";
-  if(c==="NOT_ALLOWED")return"This card is out of date. Send /donate.";
-  if(c==="TIMEOUT")return"No answer from the bot. Try again.";
-  if(c==="INVALID_ANSWER")return"That answer was invalid.";
-  return"Something went wrong. Try again.";
+  if(c==="RATE_LIMITED")return"Too many taps.";
+  if(c==="NOT_ALLOWED")return"Out of date. Send /donate.";
+  if(c==="TIMEOUT")return"No answer. Try again.";
+  if(c==="INVALID_ANSWER")return"Invalid answer.";
+  return"Something went wrong.";
 }
 function ask(x){
   if(busy||!W||!W.request)return;
