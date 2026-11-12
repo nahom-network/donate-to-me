@@ -22,7 +22,9 @@ The same Worker also serves a private admin dashboard at `/admin`: a React + Vit
    The payment provider requires the number to send the payment request. The bot forwards it for that checkout and does not store it.
 
 4. Open the secure checkout (or approve the prompt on the phone). A signed webhook notifies the bot as soon as the payment completes, so it messages you automatically; you can also tap **I’ve paid — check status** or send `/status`.
-5. `/halloffame` shows the top three people by total completed donations, aggregated across all their donations (first names only, no usernames).
+5. `/halloffame` shows the top three people by total completed donations, aggregated across all their donations (first names only, no usernames), as a podium widget.
+
+The settlement message is a widget too: a check, the amount, the rail that paid (with its logo) and the receipt reference, personalised with the donor's first name when D1 has it.
 
 Button colors use the `style` field added in Bot API 9.4 (blue = primary, green = success, red = danger). Older Telegram clients simply show their default button color.
 

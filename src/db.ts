@@ -13,6 +13,7 @@ export type HallOfFameRow = {
 export type DonationRecord = {
   userId: number;
   amountMinor: number;
+  gateway?: string | null;
 };
 
 /** Upsert every person who interacts with the bot and count interactions. */
@@ -154,12 +155,30 @@ export async function getDonationBySession(
 ): Promise<DonationRecord | null> {
   if (!env.DB) return null;
   const row = await env.DB.prepare(
-    `SELECT user_id AS userId, amount_minor AS amountMinor
+    `SELECT user_id AS userId, amount_minor AS amountMinor, gateway
      FROM donations WHERE session_id = ?`,
   )
     .bind(sessionId)
     .first<DonationRecord>();
   return row ?? null;
+}
+
+/** First name for a donor, only used to personalise the celebration card. */
+export async function getUserFirstName(
+  env: Env,
+  userId: number,
+): Promise<string | null> {
+  if (!env.DB) return null;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT first_name AS name FROM users WHERE id = ?`,
+    )
+      .bind(userId)
+      .first<{ name: string | null }>();
+    return row?.name ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

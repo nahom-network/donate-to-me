@@ -28,6 +28,7 @@ import {
   type PickerState,
 } from "./widgets";
 import { paymentClient, type CheckoutResult } from "./payment";
+import { sendCelebration, sendHallOfFame } from "./cards";
 import {
   claimUpdate,
   clearPending,
@@ -38,7 +39,6 @@ import {
 } from "./session";
 import {
   getDonationBySession,
-  getHallOfFame,
   markDonationCompleted,
   markDonationExpired,
   recordUser,
@@ -473,7 +473,7 @@ async function onWidgetQuery(query: TgWidgetQuery, env: Env) {
     env,
     chatId,
     userId,
-    { amount, gateway, createdAt: Date.now() },
+    { amount, gateway, createdAt: Date.now(), widgetMessageId: messageId },
     phonePromptText(gateway, amount),
   );
 }
@@ -598,18 +598,24 @@ async function completeCheckout(
       orderId: checkout.orderId,
       completedAt: Date.now(),
     });
-    return sendMessage(
+    await sendCelebration(
       env,
       chatId,
+      {
+        amount: pending.amount,
+        gateway: pending.gateway,
+        reference: checkout.orderId,
+      },
       `Thank you! Your ${formatEtb(pending.amount)} donation was completed. Reference: ${checkout.orderId}`,
-      removeKeyboard(),
     );
+    return;
   }
 
   const session: Session = {
     sessionId: checkout.sessionId,
     amountMinor: pending.amount * 100,
     createdAt: Date.now(),
+    widgetMessageId: pending.widgetMessageId,
   };
   const saveSession = () =>
     env.SESSIONS.put(sessionKey(userId), JSON.stringify(session), {
@@ -834,9 +840,11 @@ async function showStatus(
   const status = await payment.getCheckoutStatus(session.sessionId);
   if (status.status === "completed") {
     const message = `✅ Payment received — thank you for donating ${formatEtb(session.amountMinor / 100)}!`;
+    let gateway: string | null = null;
     try {
       const existing = await getDonationBySession(env, session.sessionId);
       if (existing) {
+        gateway = existing.gateway ?? null;
         const changed = await markDonationCompleted(
           env,
           session.sessionId,
@@ -862,7 +870,16 @@ async function showStatus(
     } catch (error) {
       console.error("Could not record completed donation", errorMessage(error));
     }
-    await sendMessage(env, chatId, message);
+    await sendCelebration(
+      env,
+      chatId,
+      {
+        amount: session.amountMinor / 100,
+        gateway,
+        reference: status.orderId,
+      },
+      message,
+    );
   } else if (status.status === "expired") {
     try {
       const changed = await markDonationExpired(env, session.sessionId);
@@ -896,38 +913,11 @@ function isHallOfFameCommand(command: string | undefined) {
 }
 
 async function showHallOfFame(chatId: number, env: Env) {
-  const header =
-    "🏆 <b>HALL OF FAME</b>\n<i>Top supporters · all-time total</i>";
-
   try {
-    const rows = await getHallOfFame(env, 3);
-
-    if (rows.length === 0) {
-      return sendMessage(
-        env,
-        chatId,
-        `${header}\n\nNo completed donations yet.\nSend /donate and take the top spot!`,
-      );
-    }
-
-    const medals = ["🥇", "🥈", "🥉"];
-    const lines = rows.map((row, index) => {
-      const name = row.firstName || "Anonymous";
-      const donations = `donation${row.donationCount === 1 ? "" : "s"}`;
-      return (
-        `${medals[index]} <b>${escapeHtml(name)}</b>\n` +
-        `     ${formatEtb(row.totalMinor / 100)} · ${row.donationCount} ${donations}`
-      );
-    });
-
-    return sendMessage(
-      env,
-      chatId,
-      `${header}\n━━━━━━━━━━━━━━\n${lines.join("\n\n")}\n━━━━━━━━━━━━━━`,
-    );
+    await sendHallOfFame(env, chatId);
   } catch (error) {
     console.error("Could not load hall of fame", errorMessage(error));
-    return sendMessage(
+    await sendMessage(
       env,
       chatId,
       "I couldn’t load the hall of fame right now. Try again in a moment.",

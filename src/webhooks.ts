@@ -14,9 +14,22 @@ import {
 } from "./db";
 import { sendMessage } from "./telegram";
 import { deleteCheckoutMessage } from "./session";
+import { sendCelebration } from "./cards";
 import { errorMessage, escapeHtml, formatEtb, json } from "./util";
 
-type Notification = { userId: number; sessionId: string; text: string };
+type Notification =
+  | {
+      kind: "completed";
+      userId: number;
+      sessionId: string;
+      /** Charge amount in ETB, not minor units. */
+      amount: number;
+      gateway?: string | null;
+      reference?: string | null;
+      /** Plain-text result, used when the celebration widget is unavailable. */
+      text: string;
+    }
+  | { kind: "expired"; userId: number; sessionId: string; text: string };
 
 /**
  * POST /webhooks/payments
@@ -104,8 +117,12 @@ async function applyEvent(
     if (existing) {
       return changed
         ? {
+            kind: "completed",
             userId: existing.userId,
             sessionId,
+            amount: existing.amountMinor / 100,
+            gateway: existing.gateway,
+            reference: orderId,
             text: `✅ Payment received — thank you for donating ${formatEtb(existing.amountMinor / 100)}!`,
           }
         : null;
@@ -137,8 +154,11 @@ async function applyEvent(
       true,
     );
     return {
+      kind: "completed",
       userId,
       sessionId,
+      amount: amount / 100,
+      reference: orderId,
       text: `✅ Payment received — thank you for donating ${formatEtb(amount / 100)}!`,
     };
   }
@@ -149,6 +169,7 @@ async function applyEvent(
     // Only tell the payer once, and only if this was a pending donation.
     if (!changed || !existing) return null;
     return {
+      kind: "expired",
       userId: existing.userId,
       sessionId: event.data.sessionId,
       text: expiredText(event.data.failure),
@@ -188,9 +209,25 @@ function expiredText(
 }
 
 async function notifyDonor(env: Env, info: Notification): Promise<void> {
-  // Delete the "approve / open checkout" prompt and send the result once, so
-  // the same text never appears twice in the chat.
+  // Delete the "approve / open checkout" prompt and the amount-picker card,
+  // then send the result once, so the same text never appears twice in the
+  // chat and no stale card is left behind.
   await deleteCheckoutMessage(env, info.userId, info.sessionId);
+
+  if (info.kind === "completed") {
+    await sendCelebration(
+      env,
+      info.userId,
+      {
+        amount: info.amount,
+        gateway: info.gateway,
+        reference: info.reference,
+      },
+      info.text,
+    );
+    return;
+  }
+
   try {
     await sendMessage(env, info.userId, info.text);
   } catch (error) {

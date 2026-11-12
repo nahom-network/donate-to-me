@@ -16,9 +16,10 @@ export function pendingKey(userId: number): string {
 }
 
 /**
- * Remove the checkout prompt instead of leaving a dead "approve / open
- * checkout" message. Used when a separate result message is about to be sent,
- * so the payer sees the result exactly once.
+ * Remove the checkout prompt and the amount-picker card instead of leaving
+ * dead "approve / open checkout" and "reply below" messages behind. Used when a
+ * separate result message is about to be sent, so the payer sees the result
+ * exactly once.
  */
 export async function deleteCheckoutMessage(
   env: Env,
@@ -29,20 +30,22 @@ export async function deleteCheckoutMessage(
     const raw = await env.SESSIONS.get(sessionKey(userId));
     if (!raw) return false;
     const session = JSON.parse(raw) as Session;
-    if (session.sessionId !== sessionId || !session.checkoutMessageId) {
-      return false;
+    if (session.sessionId !== sessionId) return false;
+    if (!session.checkoutMessageId && !session.widgetMessageId) return false;
+
+    let deleted = false;
+    if (session.checkoutMessageId) {
+      deleted = await deleteMessage(env, userId, session.checkoutMessageId);
+      if (deleted) delete session.checkoutMessageId;
     }
-    const deleted = await deleteMessage(
-      env,
-      userId,
-      session.checkoutMessageId,
-    );
-    if (deleted) {
-      delete session.checkoutMessageId;
-      await env.SESSIONS.put(sessionKey(userId), JSON.stringify(session), {
-        expirationTtl: 86400,
-      });
+    if (session.widgetMessageId) {
+      // Best effort: the card may already be gone, or too old to delete.
+      await deleteMessage(env, userId, session.widgetMessageId);
+      delete session.widgetMessageId;
     }
+    await env.SESSIONS.put(sessionKey(userId), JSON.stringify(session), {
+      expirationTtl: 86400,
+    });
     return deleted;
   } catch (error) {
     console.warn("Could not delete checkout message", errorMessage(error));

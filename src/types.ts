@@ -96,6 +96,8 @@ export type Session = {
   createdAt: number;
   /** The checkout prompt message, edited into a receipt once it settles. */
   checkoutMessageId?: number;
+  /** The amount-picker widget, removed once the donation settles. */
+  widgetMessageId?: number;
 };
 
 /** A gateway was chosen; the bot still needs the payer's phone number. */
@@ -105,6 +107,8 @@ export type PendingCheckout = {
   createdAt: number;
   /** Message id of the ForceReply phone prompt, so it can be cleaned up. */
   promptMessageId?: number;
+  /** Message id of the amount-picker widget that started this checkout. */
+  widgetMessageId?: number;
 };
 
 export type TelegramResult<T> = {
