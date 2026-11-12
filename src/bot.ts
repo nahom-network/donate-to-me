@@ -28,7 +28,7 @@ import {
   type PickerState,
 } from "./widgets";
 import { paymentClient, type CheckoutResult } from "./payment";
-import { sendCelebration, sendHallOfFame } from "./cards";
+import { sendCelebration, sendFailure, sendHallOfFame, tryAgainKeyboard } from "./cards";
 import {
   claimUpdate,
   clearPending,
@@ -896,10 +896,17 @@ async function showStatus(
     const reason = status.failure?.message
       ? ` (${escapeHtml(status.failure.message)})`
       : "";
-    await sendMessage(
+    await sendFailure(
       env,
       chatId,
+      {
+        reason: "That checkout expired.",
+        detail: status.failure?.message ?? null,
+        amount: session.amountMinor / 100,
+        variant: "expired",
+      },
       `That checkout expired${reason}. Send /donate to create a new one.`,
+      tryAgainKeyboard(),
     );
   } else {
     await sendMessage(

@@ -27,6 +27,7 @@ const GATEWAY_LOGO: Record<string, string> = {
 };
 
 const CELEBRATION_CAPTION = "Payment received — thank you! ✨";
+const FAILURE_CAPTION = "The payment didn’t complete.";
 const FAME_CAPTION = "Hall of Fame — the top 3 supporters.";
 
 export type CelebrationOptions = {
@@ -82,6 +83,56 @@ export function renderCelebration(options: CelebrationOptions): string {
 <p class="am">${etbNumber(amount)} <span>ETB</span></p>
 ${method}
 ${receipt}`;
+}
+
+const FAILURE_CSS = `
+body{margin:0;padding:16px 14px 14px;font-family:system-ui,sans-serif;color:var(--tg-theme-text-color);text-align:center}
+.w{position:relative;display:flex;justify-content:center;margin:0 0 10px}
+.gl{position:absolute;top:-16px;width:112px;height:112px;border-radius:50%}
+.bad{background:radial-gradient(circle,rgba(239,68,68,.22),rgba(239,68,68,0) 62%)}
+.wait{background:radial-gradient(circle,rgba(245,158,11,.24),rgba(245,158,11,0) 62%)}
+.ck{position:relative;width:54px;height:54px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.ck.bad{background:linear-gradient(160deg,#f87171,#dc2626)}
+.ck.wait{background:linear-gradient(160deg,#fbbf24,#d97706)}
+.ck svg{width:26px;height:26px;fill:none;stroke:#fff;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.hi{margin:0;font-size:1.02em;font-weight:600;line-height:1.3}
+.dt{margin:5px 0 0;font-size:.8em;line-height:1.4;color:var(--tg-theme-hint-color)}
+.am{margin:8px 0 0;font-size:1.35em;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
+.am span{font-size:.55em;font-weight:600;letter-spacing:.04em;color:var(--tg-theme-hint-color)}
+.ft{margin:10px 0 0;font-size:.75em;line-height:1.45;color:var(--tg-theme-hint-color)}
+@keyframes pop{0%{transform:scale(.35)}100%{transform:scale(1)}}
+@media (prefers-reduced-motion:no-preference){.ck{animation:pop .45s cubic-bezier(.2,1.5,.4,1) both}}
+`;
+
+const CROSS = `<svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>`;
+const CLOCK = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>`;
+
+export type FailureOptions = {
+  /** Headline, already user-facing plain text. */
+  reason: string;
+  /** Provider message, shown underneath when present. */
+  detail?: string | null;
+  /** Charge amount in ETB, not minor units. Omit when unknown. */
+  amount?: number | null;
+  /** `failed` = the payment did not go through; `expired` = the session timed out. */
+  variant?: "failed" | "expired";
+};
+
+/** "Payment didn't go through" card, the counterpart of the celebration. */
+export function renderFailure(options: FailureOptions): string {
+  const variant = options.variant ?? "failed";
+  const tone = variant === "expired" ? "wait" : "bad";
+  const detail = options.detail?.trim();
+  const amount =
+    typeof options.amount === "number"
+      ? `<p class="am">${etbNumber(options.amount)} <span>ETB</span></p>`
+      : "";
+  return `<style>${FAILURE_CSS}</style>
+<div class="w"><div class="gl ${tone}"></div><div class="ck ${tone}">${variant === "expired" ? CLOCK : CROSS}</div></div>
+<p class="hi">${escapeHtml(options.reason)}</p>
+${detail ? `<p class="dt">${escapeHtml(detail)}</p>` : ""}
+${amount}
+<p class="ft">Nothing was charged. You can try again whenever you like.</p>`;
 }
 
 const FAME_CSS = `
@@ -164,6 +215,40 @@ export async function sendCelebration(
     }
     return false;
   }
+}
+
+/** Send the failure card, falling back to the plain text. */
+export async function sendFailure(
+  env: Env,
+  chatId: number,
+  options: FailureOptions,
+  fallbackText: string,
+  keyboard?: unknown,
+): Promise<boolean> {
+  try {
+    await sendWidget(env, chatId, renderFailure(options), {
+      caption: FAILURE_CAPTION,
+      ...(keyboard ? { replyMarkup: keyboard } : {}),
+    });
+    return true;
+  } catch (error) {
+    console.warn("Failure widget rejected, using text", errorMessage(error));
+    try {
+      await sendMessage(env, chatId, fallbackText, keyboard);
+    } catch (sendError) {
+      console.warn("Could not notify donor", errorMessage(sendError));
+    }
+    return false;
+  }
+}
+
+/** "Try again" opens the amount picker through the existing callback. */
+export function tryAgainKeyboard(): unknown {
+  return {
+    inline_keyboard: [
+      [{ text: "Try again 🔄", callback_data: "donate", style: "primary" }],
+    ],
+  };
 }
 
 /** Send the Hall of Fame card, falling back to the plain text list. */

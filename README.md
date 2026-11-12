@@ -24,7 +24,7 @@ The same Worker also serves a private admin dashboard at `/admin`: a React + Vit
 4. Open the secure checkout (or approve the prompt on the phone). A signed webhook notifies the bot as soon as the payment completes, so it messages you automatically; you can also tap **I’ve paid — check status** or send `/status`.
 5. `/halloffame` shows the top three people by total completed donations, aggregated across all their donations (first names only, no usernames), as a podium widget with **Share** and **Copy top 3** buttons. Telegram never lets a widget be forwarded (`protect_content` is forced in production), so Share posts a `t.me/…?start=fame` link that makes the bot send a fresh podium to whoever opens it.
 
-The settlement message is a widget too: a check, the amount, the rail that paid (with its logo) and the receipt reference, personalised with the donor's first name when D1 has it.
+The settlement message is a widget too: a check, the amount, the rail that paid (with its logo) and the receipt reference, personalised with the donor's first name when D1 has it. A declined, failed or timed-out payment gets the matching failure card — red cross or amber clock, the provider's reason, the amount, and a **Try again** button that reopens the amount picker.
 
 Button colors use the `style` field added in Bot API 9.4 (blue = primary, green = success, red = danger). Older Telegram clients simply show their default button color.
 

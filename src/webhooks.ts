@@ -12,9 +12,8 @@ import {
   markDonationExpired,
   upsertDonation,
 } from "./db";
-import { sendMessage } from "./telegram";
 import { deleteCheckoutMessage } from "./session";
-import { sendCelebration } from "./cards";
+import { sendCelebration, sendFailure, tryAgainKeyboard } from "./cards";
 import { errorMessage, escapeHtml, formatEtb, json } from "./util";
 
 type Notification =
@@ -29,7 +28,16 @@ type Notification =
       /** Plain-text result, used when the celebration widget is unavailable. */
       text: string;
     }
-  | { kind: "expired"; userId: number; sessionId: string; text: string };
+  | {
+      kind: "expired";
+      userId: number;
+      sessionId: string;
+      reason: string;
+      detail?: string | null;
+      amount?: number | null;
+      variant: "failed" | "expired";
+      text: string;
+    };
 
 /**
  * POST /webhooks/payments
@@ -168,44 +176,48 @@ async function applyEvent(
     const changed = await markDonationExpired(env, event.data.sessionId);
     // Only tell the payer once, and only if this was a pending donation.
     if (!changed || !existing) return null;
+    const code = event.data.failure?.code;
+    const reason = failureReason(code);
+    const detail = event.data.failure?.message ?? null;
     return {
       kind: "expired",
       userId: existing.userId,
       sessionId: event.data.sessionId,
-      text: expiredText(event.data.failure),
+      reason,
+      detail,
+      amount: existing.amountMinor / 100,
+      variant: code === "session_expired" ? "expired" : "failed",
+      text: failureText(reason, detail),
     };
   }
 
   return null;
 }
 
-function expiredText(
-  failure: { code?: string; message?: string } | null | undefined,
-): string {
-  let reason = "The payment didn’t complete.";
-  switch (failure?.code) {
+/** User-facing headline for a payment failure code. */
+function failureReason(code?: string): string {
+  switch (code) {
     case "payment_rejected":
-      reason = "The payment was rejected by the provider.";
-      break;
+      return "The payment was rejected by the provider.";
     case "payment_failed":
-      reason = "The payment failed.";
-      break;
+      return "The payment failed.";
     case "payment_canceled":
-      reason = "You canceled the payment.";
-      break;
+      return "You canceled the payment.";
     case "payment_timed_out":
-      reason = "The payment request timed out.";
-      break;
+      return "The payment request timed out.";
     case "initiate_failed":
-      reason = "The payment couldn’t be started.";
-      break;
+      return "The payment couldn’t be started.";
     case "session_expired":
-      reason = "The checkout expired.";
-      break;
+      return "That checkout expired.";
+    default:
+      return "The payment didn’t complete.";
   }
+}
 
-  const detail = failure?.message ? `\n\n${escapeHtml(failure.message)}` : "";
-  return `⌛ ${reason}${detail}\n\nSend /donate to try again.`;
+/** Plain-text result, used when the failure widget is unavailable. */
+function failureText(reason: string, detail?: string | null): string {
+  const extra = detail ? `\n\n${escapeHtml(detail)}` : "";
+  return `⌛ ${reason}${extra}\n\nSend /donate to try again.`;
 }
 
 async function notifyDonor(env: Env, info: Notification): Promise<void> {
@@ -228,11 +240,18 @@ async function notifyDonor(env: Env, info: Notification): Promise<void> {
     return;
   }
 
-  try {
-    await sendMessage(env, info.userId, info.text);
-  } catch (error) {
-    console.warn("Could not notify donor", errorMessage(error));
-  }
+  await sendFailure(
+    env,
+    info.userId,
+    {
+      reason: info.reason,
+      detail: info.detail,
+      amount: info.amount,
+      variant: info.variant,
+    },
+    info.text,
+    tryAgainKeyboard(),
+  );
 }
 
 async function wasProcessed(env: Env, eventId: string): Promise<boolean> {
